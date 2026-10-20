@@ -27,6 +27,7 @@ export interface SchwartzValueAxis {
   id: SchwartzValueId;
   name: string;
   shortLabel: string;
+  code: string;
   angleDeg: number;
   domain: HigherOrderDomain;
   sharedDomain?: HigherOrderDomain;
@@ -41,6 +42,7 @@ export interface SchwartzValueAxis {
 export interface HigherOrderQuadrantInfo {
   id: HigherOrderDomain;
   name: string;
+  code: string;
   startAngle: number;
   endAngle: number;
   color: string;
@@ -52,6 +54,7 @@ export const HIGHER_ORDER_QUADRANTS: HigherOrderQuadrantInfo[] = [
   {
     id: HigherOrderDomain.OPENNESS_TO_CHANGE,
     name: 'Openness to Change',
+    code: 'OC',
     startAngle: -18,
     endAngle: 72,
     color: 'rgba(6, 182, 212, 0.14)',
@@ -61,6 +64,7 @@ export const HIGHER_ORDER_QUADRANTS: HigherOrderQuadrantInfo[] = [
   {
     id: HigherOrderDomain.SELF_ENHANCEMENT,
     name: 'Self-Enhancement',
+    code: 'SE',
     startAngle: 72,
     endAngle: 162,
     color: 'rgba(245, 158, 11, 0.14)',
@@ -70,6 +74,7 @@ export const HIGHER_ORDER_QUADRANTS: HigherOrderQuadrantInfo[] = [
   {
     id: HigherOrderDomain.CONSERVATION,
     name: 'Conservation',
+    code: 'CO',
     startAngle: 162,
     endAngle: 270,
     color: 'rgba(99, 102, 241, 0.14)',
@@ -79,6 +84,7 @@ export const HIGHER_ORDER_QUADRANTS: HigherOrderQuadrantInfo[] = [
   {
     id: HigherOrderDomain.SELF_TRANSCENDENCE,
     name: 'Self-Transcendence',
+    code: 'ST',
     startAngle: 270,
     endAngle: 342,
     color: 'rgba(16, 185, 129, 0.14)',
@@ -92,6 +98,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.SELF_DIRECTION,
     name: 'Self-Direction',
     shortLabel: 'SELF-DIR',
+    code: 'SD',
     angleDeg: 0,
     domain: HigherOrderDomain.OPENNESS_TO_CHANGE,
     motivationalGoal: 'Independent thought and action—choosing, creating, exploring.',
@@ -113,6 +120,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.STIMULATION,
     name: 'Stimulation',
     shortLabel: 'STIMUL',
+    code: 'ST',
     angleDeg: 36,
     domain: HigherOrderDomain.OPENNESS_TO_CHANGE,
     motivationalGoal: 'Excitement, novelty, and challenge in life.',
@@ -133,6 +141,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.HEDONISM,
     name: 'Hedonism',
     shortLabel: 'HEDONISM',
+    code: 'HE',
     angleDeg: 72,
     domain: HigherOrderDomain.OPENNESS_TO_CHANGE,
     sharedDomain: HigherOrderDomain.SELF_ENHANCEMENT,
@@ -154,6 +163,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.ACHIEVEMENT,
     name: 'Achievement',
     shortLabel: 'ACHIEVE',
+    code: 'AC',
     angleDeg: 108,
     domain: HigherOrderDomain.SELF_ENHANCEMENT,
     motivationalGoal: 'Personal success through demonstrating competence according to social standards.',
@@ -174,6 +184,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.POWER,
     name: 'Power',
     shortLabel: 'POWER',
+    code: 'PO',
     angleDeg: 144,
     domain: HigherOrderDomain.SELF_ENHANCEMENT,
     motivationalGoal: 'Social status and prestige, control or dominance over people and resources.',
@@ -195,6 +206,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.SECURITY,
     name: 'Security',
     shortLabel: 'SECURITY',
+    code: 'SE',
     angleDeg: 180,
     domain: HigherOrderDomain.CONSERVATION,
     motivationalGoal: 'Safety, harmony, and stability of society, of relationships, and of self.',
@@ -216,6 +228,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.CONFORMITY,
     name: 'Conformity',
     shortLabel: 'CONFORM',
+    code: 'CO',
     angleDeg: 216,
     domain: HigherOrderDomain.CONSERVATION,
     motivationalGoal: 'Restraint of actions, inclinations, and impulses likely to upset or harm others and violate social expectations or norms.',
@@ -237,6 +250,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.TRADITION,
     name: 'Tradition',
     shortLabel: 'TRADIT',
+    code: 'TR',
     angleDeg: 252,
     domain: HigherOrderDomain.CONSERVATION,
     motivationalGoal: 'Respect, commitment, and acceptance of the customs and ideas that traditional culture or religion provide.',
@@ -257,6 +271,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.BENEVOLENCE,
     name: 'Benevolence',
     shortLabel: 'BENEVOL',
+    code: 'BE',
     angleDeg: 288,
     domain: HigherOrderDomain.SELF_TRANSCENDENCE,
     motivationalGoal: 'Preserving and enhancing the welfare of those with whom one is in frequent personal contact (the in-group).',
@@ -277,6 +292,7 @@ export const SCHWARTZ_CIRCUMPLEX_AXES: SchwartzValueAxis[] = [
     id: SchwartzValueId.UNIVERSALISM,
     name: 'Universalism',
     shortLabel: 'UNIVERS',
+    code: 'UN',
     angleDeg: 324,
     domain: HigherOrderDomain.SELF_TRANSCENDENCE,
     motivationalGoal: 'Understanding, appreciation, tolerance, and protection for the welfare of all people and for nature.',

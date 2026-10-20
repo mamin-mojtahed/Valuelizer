@@ -5,10 +5,12 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Columns,
   Compass,
   Cpu,
   GitCompare,
   History,
+  Layers,
   Play,
   Search,
   Sliders,
@@ -150,6 +152,7 @@ export default function App() {
   const [selectedValueId, setSelectedValueId] = useState<SchwartzValueId | 'all'>('all');
   const [showScatterPoints, setShowScatterPoints] = useState<boolean>(true);
   const [showCentroidVectors, setShowCentroidVectors] = useState<boolean>(true);
+  const [radarViewMode, setRadarViewMode] = useState<'overlapping' | 'side_by_side'>('overlapping');
 
   // History Vault State
   const [vaultProfiles, setVaultProfiles] = useState<SavedVaultProfile[]>([]);
@@ -478,6 +481,17 @@ export default function App() {
     speaker2Profile,
   ]);
 
+  // Global scale bound across all active layers so side-by-side radar maps share identical dimensions
+  const globalScaleBound = useMemo(() => {
+    let maxObs = 0.35;
+    for (const layer of activeRadarLayers) {
+      for (const val of layer.profile.ipsativeVector) {
+        if (Math.abs(val) > maxObs) maxObs = Math.abs(val);
+      }
+    }
+    return Math.max(0.32, Math.min(1.2, maxObs * 1.18));
+  }, [activeRadarLayers]);
+
   // Handle YouTube URL or Keyword Search submission
   const handleSearchOrUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -775,8 +789,8 @@ export default function App() {
       </header>
 
       {/* Secondary Scientific Ingestion & Multi-Model Switcher Toolbar */}
-      <section className="bg-[#0B0E17]/70 border-b border-slate-800 px-6 py-3">
-        <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+      <section className="bg-[#0B0E17]/70 border-b border-slate-800 px-3 sm:px-5 lg:px-6 py-2.5">
+        <div className="max-w-[1440px] mx-auto flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-2.5">
           {/* Direct YouTube URL & Keyword Search Input (Expanded, High-Visibility Layout) */}
           <form onSubmit={handleSearchOrUrlSubmit} className="flex-1 flex items-center gap-2 min-w-0">
             <div className="relative flex-1 min-w-0">
@@ -787,7 +801,7 @@ export default function App() {
                 onChange={(e) => setSearchInput(e.target.value)}
                 placeholder="Paste YouTube URL (https://www.youtube.com/watch?v=...) or search debate keywords..."
                 title={searchInput || 'YouTube URL or search query'}
-                className="w-full pl-9 pr-8 py-2 bg-[#07090E] border border-slate-700 hover:border-slate-600 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/40 focus:outline-none rounded text-xs md:text-sm text-slate-100 font-mono placeholder:text-slate-500 transition-all shadow-inner tracking-tight"
+                className="w-full pl-9 pr-8 py-1.5 sm:py-2 bg-[#07090E] border border-slate-700 hover:border-slate-600 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/40 focus:outline-none rounded text-xs md:text-sm text-slate-100 font-mono placeholder:text-slate-500 transition-all shadow-inner tracking-tight"
               />
               {searchInput && (
                 <button
@@ -803,17 +817,17 @@ export default function App() {
             <button
               type="submit"
               disabled={isIngestingVideo}
-              className="px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm disabled:opacity-50"
+              className="px-3.5 py-1.5 sm:py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm disabled:opacity-50"
             >
               {isIngestingVideo ? 'Ingesting Stream...' : 'Load Stream'}
             </button>
           </form>
 
-          {/* Right Toolbar Cluster: Benchmarks & Model Selector */}
-          <div className="flex items-center gap-3 shrink-0">
+          {/* Right Toolbar Cluster: Benchmarks & Model Selector (Wraps cleanly on narrow desktop screens) */}
+          <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 shrink-0">
             {/* Pre-Indexed Benchmark Debates Selector */}
             <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
-              <span className="text-[11px] font-mono text-slate-400 mr-1 whitespace-nowrap shrink-0">
+              <span className="text-[11px] font-mono text-slate-400 mr-0.5 whitespace-nowrap shrink-0">
                 Benchmarks:
               </span>
               {PRE_INDEXED_DEBATES.map((debate, index) => {
@@ -829,7 +843,7 @@ export default function App() {
                     type="button"
                     onClick={() => handleSelectPreIndexed(debate)}
                     title={debate.title}
-                    className={`px-2.5 py-1 text-xs rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                    className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                       isSelected
                         ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/50 font-medium'
                         : 'bg-[#07090E] text-slate-400 border-slate-800 hover:text-slate-200'
@@ -842,8 +856,8 @@ export default function App() {
             </div>
 
             {/* Model Selector Dropdown & Quick Compare Toggle */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 bg-[#07090E] border border-slate-800 rounded px-2.5 py-1.5 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-1.5 bg-[#07090E] border border-slate-800 rounded px-2 py-1 sm:px-2.5 sm:py-1.5 shrink-0">
                 <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                 <label htmlFor="model-select" className="sr-only">
                   Active Embedding Model
@@ -869,7 +883,7 @@ export default function App() {
                   setIsCompareMode(nextMode);
                   setActiveSection(nextMode ? 'comparison' : 'workspace');
                 }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border transition-all cursor-pointer shrink-0 ${
+                className={`flex items-center gap-1.5 px-2.5 py-1 sm:px-3 sm:py-1.5 text-xs font-medium rounded border transition-all cursor-pointer shrink-0 ${
                   isCompareMode || activeSection === 'comparison'
                     ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60 shadow-xs font-semibold'
                     : 'bg-[#07090E] text-slate-300 border-slate-800 hover:text-slate-100 hover:border-slate-700'
@@ -900,7 +914,7 @@ export default function App() {
       </section>
 
       {/* Main Split-Screen Scientific Workspace */}
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-6 py-5">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto px-3 sm:px-5 lg:px-6 py-4 sm:py-5">
         {activeSection === 'methodology' ? (
           /* Mathematical & Psychometric Specification View */
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1020,10 +1034,10 @@ export default function App() {
             </div>
           </div>
         ) : (
-          /* Primary Split-Screen Dashboard (Left: Video & Diarized Transcript | Right: Circumplex & Analytics) */
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* LEFT PANEL (4 columns on 12-col grid): Video Playback & Synchronized Diarized Transcript */}
-            <div className="lg:col-span-4 xl:col-span-4 flex flex-col gap-4">
+          /* Primary Split-Screen Dashboard (Left: Video & Diarized Transcript | Right: Circumplex & Analytics — Side-by-Side on narrow desktop md+, Vertical on mobile) */
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 lg:gap-5 items-start">
+            {/* LEFT PANEL (5 cols on narrow desktop md/lg, 4 cols on xl): Video Playback & Synchronized Diarized Transcript */}
+            <div className="md:col-span-5 lg:col-span-5 xl:col-span-4 flex flex-col gap-3.5">
               {/* Stream Header & Execution Mode Bar */}
               <div className="bg-[#111827] border border-slate-800 rounded-md p-4 space-y-3">
                 <div className="flex items-start justify-between gap-3">
@@ -1330,13 +1344,13 @@ export default function App() {
               </div>
             </div>
 
-            {/* RIGHT PANEL (8 columns on 12-col grid): Schwartz Radar Circumplex & Value Inspector Side-by-Side */}
-            <div className="lg:col-span-8 xl:col-span-8 flex flex-col gap-4">
-              {/* Side-by-Side Row: Circumplex Graph (Left: Expanded) & Value Inspector Window (Right: Lean Vertical Sidebar) */}
-              <div className="grid grid-cols-1 md:grid-cols-12 lg:grid-cols-12 gap-4 items-start">
-                {/* Circumplex Graph Card (Expanded Graph Window: 8 of 12 cols on md/lg, 9 of 12 on xl) */}
-                <div className="md:col-span-8 lg:col-span-8 xl:col-span-9 bg-[#111827] border border-slate-800 rounded-md p-4 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2.5 pb-3 border-b border-slate-800">
+            {/* RIGHT PANEL (7 cols on narrow desktop md/lg, 8 cols on xl): Schwartz Radar Circumplex & Value Inspector */}
+            <div className="md:col-span-7 lg:col-span-7 xl:col-span-8 flex flex-col gap-3.5">
+              {/* Circumplex Graph & Value Inspector Window (Stacked inside right pane on narrow desktop so all elements fit; side-by-side on wide xl+ desktop) */}
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+                {/* Circumplex Graph Card (Full width of right pane on md/lg; 8 of 12 cols on xl+) */}
+                <div className="xl:col-span-8 2xl:col-span-9 bg-[#111827] border border-slate-800 rounded-md p-3.5 sm:p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-800">
                     <div>
                       <div className="text-[11px] font-mono text-slate-400">
                         10-AXIS IPSATIVE CIRCUMPLEX · I_k = S_k - S̄
@@ -1350,8 +1364,9 @@ export default function App() {
                       </h2>
                     </div>
 
-                    {/* Speaker Selection & Save to Vault Controls */}
-                    <div className="flex items-center gap-1.5">
+                    {/* Controls: Speaker Selection, Save & Radar View Mode */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {/* Speaker Selector (Visible in Real-time workspace mode) */}
                       {!(isCompareMode || activeSection === 'comparison') &&
                         activeSection !== 'vault' && (
                           <div className="flex items-center gap-1 p-0.5 bg-[#07090E] border border-slate-800 rounded text-xs">
@@ -1391,6 +1406,7 @@ export default function App() {
                           </div>
                         )}
 
+                      {/* Save to History Vault Button */}
                       <button
                         type="button"
                         onClick={handleSaveCurrentToVault}
@@ -1409,6 +1425,44 @@ export default function App() {
                           </>
                         )}
                       </button>
+
+                      {/* Radar Map Display Toggle: Icon-Only Overlapping (Layers) vs. Side-by-Side (Columns) */}
+                      <div className="flex items-center gap-0.5 p-0.5 bg-[#07090E] border border-slate-800 rounded">
+                        <button
+                          type="button"
+                          onClick={() => setRadarViewMode('overlapping')}
+                          className={`p-1.5 rounded transition-colors cursor-pointer ${
+                            radarViewMode === 'overlapping'
+                              ? 'bg-cyan-500 text-slate-950 font-bold shadow-xs'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                          title="Overlapping view (default): Overlay active profiles on a single radar chart"
+                          aria-label="Overlapping view"
+                        >
+                          <Layers className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRadarViewMode('side_by_side');
+                            if (
+                              !(isCompareMode || activeSection === 'comparison') &&
+                              activeSection !== 'vault'
+                            ) {
+                              setSpeakerOverlayMode('both');
+                            }
+                          }}
+                          className={`p-1.5 rounded transition-colors cursor-pointer ${
+                            radarViewMode === 'side_by_side'
+                              ? 'bg-cyan-500 text-slate-950 font-bold shadow-xs'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                          title="Side-by-Side view: Display active profiles in separate side-by-side radar charts"
+                          aria-label="Side-by-Side view"
+                        >
+                          <Columns className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -1484,56 +1538,6 @@ export default function App() {
                               </button>
                             );
                           })}
-
-                          {/* Quick Multi-Model Presets: 2 Models, 3 Models, All 4 Models */}
-                          <div className="flex items-center gap-1 bg-[#111827] border border-slate-800 rounded p-0.5">
-                            <span className="text-[10px] font-mono text-slate-400 px-1">Presets:</span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setSelectedCompareModels(['gemini-embedding-2', 'local-minilm'])
-                              }
-                              className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
-                                selectedCompareModels.length === 2 &&
-                                selectedCompareModels.includes('gemini-embedding-2') &&
-                                selectedCompareModels.includes('local-minilm')
-                                  ? 'bg-cyan-500 text-slate-950 font-bold'
-                                  : 'text-slate-400 hover:text-slate-200'
-                              }`}
-                            >
-                              2 Models
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setSelectedCompareModels([
-                                  'gemini-embedding-2',
-                                  'local-minilm',
-                                  'openai-small',
-                                ])
-                              }
-                              className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
-                                selectedCompareModels.length === 3
-                                  ? 'bg-cyan-500 text-slate-950 font-bold'
-                                  : 'text-slate-400 hover:text-slate-200'
-                              }`}
-                            >
-                              3 Models
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setSelectedCompareModels(EMBEDDING_MODELS.map((m) => m.id))
-                              }
-                              className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
-                                selectedCompareModels.length === 4
-                                  ? 'bg-cyan-500 text-slate-950 font-bold'
-                                  : 'text-slate-400 hover:text-slate-200'
-                              }`}
-                            >
-                              All 4 Models
-                            </button>
-                          </div>
                         </div>
                       </div>
 
@@ -1550,19 +1554,67 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Interactive SVG Radar Circumplex */}
-                  <div className="py-1 flex justify-center">
-                    <RadarCircumplex
-                      layers={activeRadarLayers}
-                      utterances={primaryUtterances}
-                      selectedValueId={selectedValueId}
-                      onSelectValue={setSelectedValueId}
-                      onSeekToTimestamp={handleSeekToTimestamp}
-                      showScatterPoints={showScatterPoints}
-                      showCentroidVectors={showCentroidVectors}
-                      upToTimestamp={effectiveCutoffTime}
-                    />
-                  </div>
+                  {/* Interactive SVG Radar Circumplex (Overlapping Default vs. Side-by-Side Mode) */}
+                  {radarViewMode === 'overlapping' ? (
+                    <div className="py-1 flex justify-center">
+                      <RadarCircumplex
+                        layers={activeRadarLayers}
+                        utterances={primaryUtterances}
+                        selectedValueId={selectedValueId}
+                        onSelectValue={setSelectedValueId}
+                        onSeekToTimestamp={handleSeekToTimestamp}
+                        showScatterPoints={showScatterPoints}
+                        showCentroidVectors={showCentroidVectors}
+                        upToTimestamp={effectiveCutoffTime}
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      className={`grid gap-3 py-1 ${
+                        activeRadarLayers.length >= 2
+                          ? 'grid-cols-1 sm:grid-cols-2'
+                          : 'grid-cols-1'
+                      }`}
+                    >
+                      {activeRadarLayers.map((layer) => (
+                        <div
+                          key={`side-by-side-${layer.id}`}
+                          className="bg-[#07090E] border border-slate-800/90 rounded-md p-2.5 flex flex-col items-center space-y-1.5"
+                        >
+                          <div className="w-full flex items-center justify-between text-xs px-1 border-b border-slate-800/80 pb-1.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span
+                                className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                style={{ backgroundColor: layer.color }}
+                              />
+                              <span className="font-semibold text-slate-100 truncate text-xs">
+                                {layer.label}
+                              </span>
+                            </div>
+                            <div className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
+                              <span className="text-cyan-400 font-semibold">
+                                θ={layer.profile.centroid.angleDeg.toFixed(0)}°
+                              </span>{' '}
+                              · r={layer.profile.centroid.magnitude.toFixed(2)}
+                            </div>
+                          </div>
+                          <RadarCircumplex
+                            layers={[layer]}
+                            utterances={primaryUtterances}
+                            selectedValueId={selectedValueId}
+                            onSelectValue={setSelectedValueId}
+                            onSeekToTimestamp={handleSeekToTimestamp}
+                            showScatterPoints={showScatterPoints}
+                            showCentroidVectors={showCentroidVectors}
+                            upToTimestamp={effectiveCutoffTime}
+                            className="max-w-[340px]"
+                            fixedScaleBound={globalScaleBound}
+                            isCompact={true}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Circumplex Layer Legend & Net Motivational Centroid Vector Summary */}
                   <div className="pt-3 border-t border-slate-800 space-y-2">
@@ -1608,8 +1660,8 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Value Inspector Card (Lean Vertical Sidebar: 4 cols on md/lg, 3 cols on xl) */}
-                <div className="md:col-span-4 lg:col-span-4 xl:col-span-3 bg-[#111827] border border-slate-800 rounded-md p-3 space-y-2.5 sticky top-4">
+                {/* Value Inspector Card (Full width below graph on narrow desktop md/lg; 4 cols on xl, 3 cols on 2xl) */}
+                <div className="xl:col-span-4 2xl:col-span-3 bg-[#111827] border border-slate-800 rounded-md p-3 space-y-2.5 xl:sticky xl:top-4">
                   <div className="flex flex-col gap-1.5 pb-2 border-b border-slate-800">
                     <div className="flex items-center gap-1.5 text-xs font-mono text-slate-300 min-w-0">
                       <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />

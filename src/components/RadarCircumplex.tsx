@@ -31,6 +31,9 @@ interface RadarCircumplexProps {
   showScatterPoints?: boolean;
   showCentroidVectors?: boolean;
   upToTimestamp?: number;
+  className?: string;
+  fixedScaleBound?: number;
+  isCompact?: boolean;
 }
 
 export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
@@ -42,6 +45,9 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
   showScatterPoints = true,
   showCentroidVectors = true,
   upToTimestamp,
+  className,
+  fixedScaleBound,
+  isCompact = false,
 }) => {
   const [hoveredDot, setHoveredDot] = useState<{
     utteranceId: string;
@@ -56,14 +62,14 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
     y: number;
   } | null>(null);
 
-  const size = 660;
+  const size = 700;
   const cx = size / 2;
   const cy = size / 2;
   const minInnerRadius = 38;
-  const neutralRadius = 128; // I_k = 0 Ipsative Neutral Baseline Ring
-  const maxRadius = 228;
-  const quadrantInnerR = 238;
-  const quadrantOuterR = 250;
+  const neutralRadius = 132; // I_k = 0 Ipsative Neutral Baseline Ring
+  const maxRadius = 220;
+  const quadrantInnerR = 290;
+  const quadrantOuterR = 316;
 
   // Dynamic scale normalization across active layers so polygons utilize full dynamic range cleanly
   let maxObservedAbsIpsative = 0.35;
@@ -74,7 +80,7 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
       }
     }
   }
-  const scaleBound = Math.max(0.32, Math.min(1.2, maxObservedAbsIpsative * 1.18));
+  const scaleBound = fixedScaleBound ?? Math.max(0.32, Math.min(1.2, maxObservedAbsIpsative * 1.18));
 
   const ringSteps = [
     { r: minInnerRadius, label: `-${scaleBound.toFixed(2)}`, isNeutral: false },
@@ -93,7 +99,7 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
     <div className="relative w-full flex flex-col items-center select-none">
       <svg
         viewBox={`0 0 ${size} ${size}`}
-        className="w-full max-w-[620px] aspect-square cursor-crosshair overflow-visible"
+        className={`w-full ${className || 'max-w-[620px]'} aspect-square cursor-crosshair overflow-visible`}
         role="img"
         aria-label="Schwartz 10-Axis Circumplex Radar Chart"
       >
@@ -114,7 +120,7 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
           ))}
         </defs>
 
-        {/* 1. Outer Higher-Order Quadrant Arcs */}
+        {/* 1. Outer Higher-Order Quadrant Arcs & Curved Arced Titles */}
         {HIGHER_ORDER_QUADRANTS.map((q) => {
           const arcPath = describeArcBand(
             cx,
@@ -125,7 +131,21 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
             q.endAngle
           );
           const midAngle = (q.startAngle + q.endAngle) / 2;
-          const labelPos = polarToCartesian(cx, cy, quadrantOuterR + 48, midAngle);
+          const isBottom = midAngle > 90 && midAngle < 270;
+          // Upper arc (sweep=1) baseline at 298 extends outward to ~308.
+          // Lower arc (sweep=0) baseline at 308 extends inward to ~298.
+          // Both sit perfectly centered in the 290-316 arc band with 8px padding on both sides.
+          const textArcR = isBottom ? 308 : 298;
+          const a1 = isBottom ? q.endAngle : q.startAngle;
+          const a2 = isBottom ? q.startAngle : q.endAngle;
+          const sweep = isBottom ? 0 : 1;
+          const p1 = polarToCartesian(cx, cy, textArcR, a1);
+          const p2 = polarToCartesian(cx, cy, textArcR, a2);
+          const angleDiff = Math.abs(q.endAngle - q.startAngle);
+          const largeArc = angleDiff > 180 ? 1 : 0;
+          const textArcD = `M ${p1.x} ${p1.y} A ${textArcR} ${textArcR} 0 ${largeArc} ${sweep} ${p2.x} ${p2.y}`;
+
+          const quadrantLabel = isCompact ? q.code : q.name;
 
           return (
             <g key={q.id}>
@@ -133,18 +153,24 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                 d={arcPath}
                 fill={q.color}
                 stroke={q.strokeColor}
-                strokeWidth={1.25}
-                strokeOpacity={0.65}
+                strokeWidth={1.5}
+                strokeOpacity={0.75}
               />
-              <text
-                x={labelPos.x}
-                y={labelPos.y}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                fill={q.strokeColor}
-                className="text-[10px] font-mono font-semibold tracking-wider"
-              >
-                {q.name}
+              <path
+                id={`quadrant-text-path-${q.id}${isCompact ? '-compact' : ''}`}
+                d={textArcD}
+                fill="none"
+                stroke="none"
+              />
+              <text className={`${isCompact ? 'text-[28px] font-black' : 'text-[11.5px] font-bold'} font-mono tracking-widest uppercase`}>
+                <textPath
+                  href={`#quadrant-text-path-${q.id}${isCompact ? '-compact' : ''}`}
+                  startOffset="50%"
+                  textAnchor="middle"
+                  fill={q.strokeColor}
+                >
+                  {quadrantLabel}
+                </textPath>
               </text>
             </g>
           );
@@ -210,11 +236,15 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
           strokeDasharray="2 4"
         />
 
-        {/* 3. The 10 Schwartz Radial Axes */}
+        {/* 3. The 10 Schwartz Radial Axes & Prominent Dimension Badges */}
         {SCHWARTZ_CIRCUMPLEX_AXES.map((axis) => {
           const outerPt = polarToCartesian(cx, cy, maxRadius, axis.angleDeg);
           const labelPt = polarToCartesian(cx, cy, maxRadius + 38, axis.angleDeg);
           const isSelected = selectedValueId === axis.id;
+
+          const labelText = isCompact ? axis.code : axis.name;
+          const badgeWidth = isCompact ? 76 : 108;
+          const badgeHeight = isCompact ? 44 : 28;
 
           return (
             <g
@@ -222,6 +252,7 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
               onClick={() => onSelectValue(axis.id)}
               className="cursor-pointer group"
             >
+              <title>{`${axis.name} (${axis.code}): ${axis.motivationalGoal}`}</title>
               {/* Invisible wider hit area for smooth axis clicking */}
               <line
                 x1={cx}
@@ -229,7 +260,7 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                 x2={outerPt.x}
                 y2={outerPt.y}
                 stroke="transparent"
-                strokeWidth={18}
+                strokeWidth={20}
               />
               {/* Visible radial spoke */}
               <line
@@ -238,39 +269,42 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                 x2={outerPt.x}
                 y2={outerPt.y}
                 stroke={isSelected ? axis.color : '#334155'}
-                strokeWidth={isSelected ? 2 : 1}
-                strokeOpacity={isSelected ? 0.95 : 0.65}
+                strokeWidth={isSelected ? 2.5 : 1.25}
+                strokeOpacity={isSelected ? 1 : 0.7}
               />
 
               {/* Axis perimeter node */}
               <circle
                 cx={outerPt.x}
                 cy={outerPt.y}
-                r={isSelected ? 4.5 : 3}
+                r={isSelected ? 5 : 3.5}
                 fill={isSelected ? axis.color : '#475569'}
               />
 
-              {/* Axis Vertex Label (Clean value name without behind-the-scenes placement degrees) */}
+              {/* Axis Vertex Label Badge (Doubled text size for ultra-prominent 2-letter acronyms in compact mode) */}
               <g transform={`translate(${labelPt.x}, ${labelPt.y})`}>
                 <rect
-                  x={-44}
-                  y={-12}
-                  width={88}
-                  height={24}
-                  rx={4}
-                  fill={isSelected ? '#1E293B' : 'rgba(7, 9, 14, 0.85)'}
-                  stroke={isSelected ? axis.color : '#1E293B'}
-                  strokeWidth={isSelected ? 1.25 : 0.75}
+                  x={-badgeWidth / 2}
+                  y={-badgeHeight / 2}
+                  width={badgeWidth}
+                  height={badgeHeight}
+                  rx={isCompact ? 8 : 6}
+                  fill={isSelected ? '#0F172A' : '#090D16'}
+                  stroke={isSelected ? axis.color : '#334155'}
+                  strokeWidth={isSelected ? 2.5 : 1.5}
+                  className="transition-all duration-150 group-hover:stroke-slate-400"
                 />
                 <text
                   x={0}
                   y={0}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fill={isSelected ? '#F8FAFC' : '#CBD5E1'}
-                  className="text-[10.5px] font-semibold tracking-tight"
+                  fill={isSelected ? '#FFFFFF' : '#F1F5F9'}
+                  className={`${
+                    isCompact ? 'text-[32px] font-black' : 'text-[12.5px] font-bold'
+                  } tracking-tight`}
                 >
-                  {axis.name}
+                  {labelText}
                 </text>
               </g>
             </g>
