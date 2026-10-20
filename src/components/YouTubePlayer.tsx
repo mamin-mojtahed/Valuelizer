@@ -64,8 +64,10 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
 
     if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
       try {
-        playerRef.current.loadVideoById(videoId);
+        playerRef.current.loadVideoById({ videoId, startSeconds: 0 });
+        playerRef.current.seekTo(0, true);
         playerRef.current.pauseVideo();
+        onTimeUpdate(0);
       } catch (_e) {
         // Fallback handled by synthetic clock
       }
@@ -81,8 +83,12 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
           modestbranding: 1,
           rel: 0,
           playsinline: 1,
+          start: 0,
         },
         events: {
+          onReady: () => {
+            onTimeUpdate(0);
+          },
           onStateChange: (event: any) => {
             if (event.data === window.YT.PlayerState.PLAYING) {
               onPlayStateChange(true);
@@ -130,7 +136,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
         }
       }
 
-      if (polledTime !== null && !Number.isNaN(polledTime) && polledTime > 0) {
+      if (polledTime !== null && !Number.isNaN(polledTime) && polledTime >= 0) {
         onTimeUpdate(Math.min(durationSeconds, polledTime));
       } else {
         onTimeUpdate(

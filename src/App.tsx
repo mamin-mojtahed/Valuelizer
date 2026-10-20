@@ -78,7 +78,7 @@ export default function App() {
 
   // Playback & Execution Mode
   const [executionMode, setExecutionMode] = useState<'sync' | 'batch'>('sync');
-  const [currentTime, setCurrentTime] = useState<number>(85);
+  const [currentTime, setCurrentTime] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [seekRequest, setSeekRequest] = useState<{ timestamp: number; nonce: number } | null>(
     null
@@ -278,10 +278,10 @@ export default function App() {
     }
   }, [primaryUtterances, vaultProfiles.length, activeDebate, primaryModel]);
 
-  // Effective timestamp cutoff: in 'sync' mode, only utterances up to currentTime are included;
-  // in 'batch' mode, if the user scrubs the playhead, they can also see the state at currentTime
+  // Effective timestamp cutoff: in 'sync' mode, utterances up to currentTime are dynamically evaluated;
+  // in 'batch' mode, the complete video profile is rendered while allowing the user to scrub the video from 0s.
   const effectiveCutoffTime =
-    executionMode === 'sync' ? currentTime : currentTime < activeDebate.durationSeconds ? currentTime : undefined;
+    executionMode === 'sync' ? currentTime : undefined;
 
   // Compute real-time speaker profiles for Primary Model
   const speaker1Profile = useMemo(
@@ -437,11 +437,8 @@ export default function App() {
 
     if (matchedPreset) {
       setActiveDebate(matchedPreset);
-      if (executionMode === 'batch') {
-        setCurrentTime(matchedPreset.durationSeconds);
-      } else {
-        setCurrentTime(75);
-      }
+      setCurrentTime(0);
+      setSeekRequest({ timestamp: 0, nonce: Date.now() });
       setIsPlaying(false);
       return;
     }
@@ -489,17 +486,22 @@ export default function App() {
             color: '#F59E0B',
           },
         },
-        turns: (data.turns || []).map((t: any, idx: number) => ({
-          id: `custom-t-${idx + 1}`,
-          timestamp: Number(t.timestamp) || idx * 14,
-          endTime: Number(t.endTime) || (idx + 1) * 14,
-          speakerId: t.speakerId === 'speaker_2' ? 'speaker_2' : 'speaker_1',
-          text: t.text,
-        })),
+        turns: (data.turns || []).map((t: any, idx: number) => {
+          const start = typeof t.timestamp === 'number' && !isNaN(t.timestamp) ? Math.max(0, t.timestamp) : idx * 6;
+          const end = typeof t.endTime === 'number' && !isNaN(t.endTime) ? Math.max(start + 1, t.endTime) : start + 6;
+          return {
+            id: `custom-t-${idx + 1}`,
+            timestamp: Math.round(start),
+            endTime: Math.round(end),
+            speakerId: t.speakerId === 'speaker_2' ? 'speaker_2' : 'speaker_1',
+            text: (t.text || '').trim(),
+          };
+        }).filter((t: any) => t.text.length > 0),
       };
 
       setActiveDebate(customDebate);
-      setCurrentTime(customDebate.durationSeconds);
+      setCurrentTime(0);
+      setSeekRequest({ timestamp: 0, nonce: Date.now() });
       setIsPlaying(false);
     } catch (err: any) {
       let msg = err?.message || 'Unable to load custom stream; loaded nearest benchmark debate.';
@@ -522,17 +524,13 @@ export default function App() {
     setActiveDebate(debate);
     setSearchInput(debate.youtubeUrl);
     setIsPlaying(false);
-    if (executionMode === 'batch') {
-      setCurrentTime(debate.durationSeconds);
-    } else {
-      setCurrentTime(85);
-    }
+    setCurrentTime(0);
+    setSeekRequest({ timestamp: 0, nonce: Date.now() });
   };
 
   const handleProcessAllFastBatch = async () => {
     setIsPlaying(false);
     setExecutionMode('batch');
-    setCurrentTime(activeDebate.durationSeconds);
     await runEvaluationPipeline(
       activeDebate,
       primaryModel,
@@ -546,9 +544,7 @@ export default function App() {
 
   const handleSeekToTimestamp = (seconds: number, _utteranceId?: string) => {
     setSeekRequest({ timestamp: seconds, nonce: Date.now() });
-    if (executionMode === 'sync' && seconds > currentTime) {
-      setCurrentTime(seconds);
-    }
+    setCurrentTime(seconds);
   };
 
   const handleSaveCurrentToVault = () => {
