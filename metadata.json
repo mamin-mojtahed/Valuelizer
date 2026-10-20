@@ -1,0 +1,6 @@
+{
+  "name": "Valuelizer",
+  "description": "Real-time psychological values profiling of YouTube conversations based on Shalom H. Schwartz's Theory of Basic Human Values using dual-anchor vector polarity and ipsative circumplex geometry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
