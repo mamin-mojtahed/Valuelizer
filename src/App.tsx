@@ -3,6 +3,8 @@ import {
   Activity,
   BookmarkPlus,
   Check,
+  ChevronDown,
+  ChevronUp,
   Compass,
   Cpu,
   GitCompare,
@@ -27,6 +29,7 @@ import {
 } from './services/embeddingService';
 import {
   computeModelAgreement,
+  computeMultiModelAgreement,
   computeSpeakerProfile,
   EvaluatedUtterance,
   formatTimestamp,
@@ -51,6 +54,40 @@ const VAULT_STORAGE_KEY = 'valuelizer_history_vault_v1';
 
 const VAULT_PALETTE = ['#06B6D4', '#F59E0B', '#EC4899', '#10B981', '#818CF8', '#F43F5E'];
 
+export const MODEL_PALETTE: Record<
+  EmbeddingModelId,
+  { color: string; label: string; shortLabel: string; dashed: boolean; tag: string }
+> = {
+  'gemini-embedding-2': {
+    color: '#06B6D4', // Cyan
+    label: 'gemini-embedding-2',
+    shortLabel: 'Gemini-2',
+    dashed: false,
+    tag: '3072D',
+  },
+  'gemini-embedding-001': {
+    color: '#818CF8', // Indigo
+    label: 'gemini-embedding-001',
+    shortLabel: 'Gemini-001',
+    dashed: false,
+    tag: '768D',
+  },
+  'local-minilm': {
+    color: '#EC4899', // Pink
+    label: 'all-MiniLM-L6-v2',
+    shortLabel: 'MiniLM',
+    dashed: true,
+    tag: '384D',
+  },
+  'openai-small': {
+    color: '#10B981', // Emerald
+    label: 'text-embedding-3-small',
+    shortLabel: 'OpenAI-3',
+    dashed: true,
+    tag: '1536D',
+  },
+};
+
 export default function App() {
   // Navigation & View Mode
   const [activeSection, setActiveSection] = useState<
@@ -65,6 +102,10 @@ export default function App() {
 
   // Embedding Engine & Calibration Controls
   const [primaryModel, setPrimaryModel] = useState<EmbeddingModelId>('gemini-embedding-2');
+  const [selectedCompareModels, setSelectedCompareModels] = useState<EmbeddingModelId[]>([
+    'gemini-embedding-2',
+    'local-minilm',
+  ]);
   const [comparisonModel, setComparisonModel] = useState<EmbeddingModelId>('local-minilm');
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false);
   const [thresholdTau, setThresholdTau] = useState<number>(0.08);
@@ -95,6 +136,9 @@ export default function App() {
 
   const [primaryUtterances, setPrimaryUtterances] = useState<EvaluatedUtterance[]>([]);
   const [comparisonUtterances, setComparisonUtterances] = useState<EvaluatedUtterance[]>([]);
+  const [evaluatedUtterancesByModel, setEvaluatedUtterancesByModel] = useState<
+    Partial<Record<EmbeddingModelId, EvaluatedUtterance[]>>
+  >({});
 
   // Right Panel Visualization Controls
   const [speakerOverlayMode, setSpeakerOverlayMode] = useState<
@@ -103,9 +147,7 @@ export default function App() {
   const [compareSpeakerTarget, setCompareSpeakerTarget] = useState<'speaker_1' | 'speaker_2'>(
     'speaker_1'
   );
-  const [selectedValueId, setSelectedValueId] = useState<SchwartzValueId>(
-    SchwartzValueId.SECURITY
-  );
+  const [selectedValueId, setSelectedValueId] = useState<SchwartzValueId | 'all'>('all');
   const [showScatterPoints, setShowScatterPoints] = useState<boolean>(true);
   const [showCentroidVectors, setShowCentroidVectors] = useState<boolean>(true);
 
@@ -113,6 +155,7 @@ export default function App() {
   const [vaultProfiles, setVaultProfiles] = useState<SavedVaultProfile[]>([]);
   const [selectedVaultIds, setSelectedVaultIds] = useState<string[]>([]);
   const [justSavedToast, setJustSavedToast] = useState<boolean>(false);
+  const [isTranscriptExpanded, setIsTranscriptExpanded] = useState<boolean>(false);
 
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
 
@@ -124,12 +167,12 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Run primary model evaluation whenever debate, model, or calibration changes
+  // Run model evaluation whenever debate, models, or calibration changes
   const runEvaluationPipeline = useCallback(
     async (
       debate: PreIndexedDebate,
       modelA: EmbeddingModelId,
-      modelB: EmbeddingModelId,
+      compareModelsList: EmbeddingModelId[],
       compareActive: boolean,
       tau: number,
       contextExp: boolean,
@@ -149,6 +192,10 @@ export default function App() {
           }
         );
         setPrimaryUtterances(resA.evaluated);
+        setEvaluatedUtterancesByModel((prev) => ({
+          ...prev,
+          [modelA]: resA.evaluated,
+        }));
         setEngineSourceBadge(
           resA.source === 'live-api'
             ? `${modelA} · Live Vector API`
@@ -158,18 +205,32 @@ export default function App() {
         );
 
         if (compareActive) {
-          const resB = await evaluateTranscriptTurns(
-            debate.turns,
-            modelB,
-            tau,
-            contextExp,
-            false,
-            debate.speakers,
-            (completed, total, status) => {
-              setBatchProgress({ completed, total, status: `[Compare] ${status}` });
+          const modelsToEval = compareModelsList.filter((m) => m !== modelA);
+          for (const mId of modelsToEval) {
+            setBatchProgress({
+              completed: 0,
+              total: debate.turns.length,
+              status: `[Comparing] Evaluating ${mId}...`,
+            });
+            const resM = await evaluateTranscriptTurns(
+              debate.turns,
+              mId,
+              tau,
+              contextExp,
+              false,
+              debate.speakers,
+              (completed, total, status) => {
+                setBatchProgress({ completed, total, status: `[${mId}] ${status}` });
+              }
+            );
+            setEvaluatedUtterancesByModel((prev) => ({
+              ...prev,
+              [mId]: resM.evaluated,
+            }));
+            if (mId === compareModelsList[1] || mId === compareModelsList[0]) {
+              setComparisonUtterances(resM.evaluated);
             }
-          );
-          setComparisonUtterances(resB.evaluated);
+          }
         }
       } finally {
         setIsProcessingBatch(false);
@@ -194,7 +255,7 @@ export default function App() {
     runEvaluationPipeline(
       activeDebate,
       primaryModel,
-      comparisonModel,
+      selectedCompareModels,
       isCompareMode || activeSection === 'comparison',
       thresholdTau,
       useContextExpansion,
@@ -203,7 +264,7 @@ export default function App() {
   }, [
     activeDebate,
     primaryModel,
-    comparisonModel,
+    selectedCompareModels,
     isCompareMode,
     activeSection,
     thresholdTau,
@@ -308,29 +369,46 @@ export default function App() {
     [primaryUtterances, activeDebate, effectiveCutoffTime]
   );
 
-  // Compute speaker profiles for Comparison Model (Model B)
-  const compareModelProfileA = useMemo(
-    () =>
-      computeSpeakerProfile(
-        primaryUtterances,
-        compareSpeakerTarget,
-        `${activeDebate.speakers[compareSpeakerTarget].name} (${primaryModel})`,
-        '#06B6D4'
-      ),
-    [primaryUtterances, compareSpeakerTarget, activeDebate, primaryModel]
+  // Compute multi-model profiles for all selected comparison models
+  const multiModelProfiles = useMemo(() => {
+    return selectedCompareModels.map((mId) => {
+      const utts =
+        evaluatedUtterancesByModel[mId] ||
+        (mId === primaryModel ? primaryUtterances : comparisonUtterances);
+      const meta = MODEL_PALETTE[mId];
+      const modelName = EMBEDDING_MODELS.find((m) => m.id === mId)?.name || mId;
+      return {
+        modelId: mId,
+        modelName,
+        shortLabel: meta?.shortLabel || mId,
+        color: meta?.color || '#06B6D4',
+        dashed: meta?.dashed ?? false,
+        tag: meta?.tag || '',
+        profile: computeSpeakerProfile(
+          utts.length > 0 ? utts : primaryUtterances,
+          compareSpeakerTarget,
+          `${activeDebate.speakers[compareSpeakerTarget].name} (${meta?.shortLabel || mId})`,
+          meta?.color || '#06B6D4'
+        ),
+      };
+    });
+  }, [
+    selectedCompareModels,
+    evaluatedUtterancesByModel,
+    primaryModel,
+    primaryUtterances,
+    comparisonUtterances,
+    compareSpeakerTarget,
+    activeDebate,
+  ]);
+
+  const multiModelAgreement = useMemo(
+    () => computeMultiModelAgreement(multiModelProfiles),
+    [multiModelProfiles]
   );
 
-  const compareModelProfileB = useMemo(
-    () =>
-      computeSpeakerProfile(
-        comparisonUtterances.length > 0 ? comparisonUtterances : primaryUtterances,
-        compareSpeakerTarget,
-        `${activeDebate.speakers[compareSpeakerTarget].name} (${comparisonModel})`,
-        '#EC4899'
-      ),
-    [comparisonUtterances, primaryUtterances, compareSpeakerTarget, activeDebate, comparisonModel]
-  );
-
+  const compareModelProfileA = multiModelProfiles[0]?.profile || speaker1Profile;
+  const compareModelProfileB = multiModelProfiles[1]?.profile || speaker2Profile;
   const modelAgreement = useMemo(
     () => computeModelAgreement(compareModelProfileA, compareModelProfileB),
     [compareModelProfileA, compareModelProfileB]
@@ -339,23 +417,14 @@ export default function App() {
   // Determine active Radar Polygon layers based on view mode
   const activeRadarLayers: RadarPolygonLayer[] = useMemo(() => {
     if (isCompareMode || activeSection === 'comparison') {
-      return [
-        {
-          id: 'model-a',
-          label: `Model A · ${primaryModel}`,
-          sublabel: activeDebate.speakers[compareSpeakerTarget].name,
-          color: '#06B6D4', // Cyan
-          profile: compareModelProfileA,
-        },
-        {
-          id: 'model-b',
-          label: `Model B · ${comparisonModel}`,
-          sublabel: activeDebate.speakers[compareSpeakerTarget].name,
-          color: '#EC4899', // Magenta
-          profile: compareModelProfileB,
-          dashed: true,
-        },
-      ];
+      return multiModelProfiles.map((mp) => ({
+        id: `compare-${mp.modelId}`,
+        label: `${mp.shortLabel} (${mp.tag})`,
+        sublabel: activeDebate.speakers[compareSpeakerTarget].name,
+        color: mp.color,
+        profile: mp.profile,
+        dashed: mp.dashed,
+      }));
     }
 
     if (activeSection === 'vault') {
@@ -399,6 +468,7 @@ export default function App() {
     comparisonModel,
     activeDebate,
     compareSpeakerTarget,
+    multiModelProfiles,
     compareModelProfileA,
     compareModelProfileB,
     vaultProfiles,
@@ -534,7 +604,7 @@ export default function App() {
     await runEvaluationPipeline(
       activeDebate,
       primaryModel,
-      comparisonModel,
+      selectedCompareModels,
       isCompareMode || activeSection === 'comparison',
       thresholdTau,
       useContextExpansion,
@@ -706,95 +776,119 @@ export default function App() {
 
       {/* Secondary Scientific Ingestion & Multi-Model Switcher Toolbar */}
       <section className="bg-[#0B0E17]/70 border-b border-slate-800 px-6 py-3">
-        <div className="max-w-[1440px] mx-auto flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
-          {/* Direct YouTube URL & Keyword Search Input */}
-          <form onSubmit={handleSearchOrUrlSubmit} className="flex-1 flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+          {/* Direct YouTube URL & Keyword Search Input (Expanded, High-Visibility Layout) */}
+          <form onSubmit={handleSearchOrUrlSubmit} className="flex-1 flex items-center gap-2 min-w-0">
+            <div className="relative flex-1 min-w-0">
+              <Search className="w-4 h-4 text-cyan-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 placeholder="Paste YouTube URL (https://www.youtube.com/watch?v=...) or search debate keywords..."
-                className="w-full pl-9 pr-3 py-1.5 bg-[#07090E] border border-slate-700 focus:border-cyan-400 focus:outline-none rounded text-xs text-slate-100 font-mono"
+                title={searchInput || 'YouTube URL or search query'}
+                className="w-full pl-9 pr-8 py-2 bg-[#07090E] border border-slate-700 hover:border-slate-600 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/40 focus:outline-none rounded text-xs md:text-sm text-slate-100 font-mono placeholder:text-slate-500 transition-all shadow-inner tracking-tight"
               />
+              {searchInput && (
+                <button
+                  type="button"
+                  onClick={() => setSearchInput('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 text-xs font-mono p-0.5 cursor-pointer"
+                  title="Clear input"
+                >
+                  ✕
+                </button>
+              )}
             </div>
             <button
               type="submit"
               disabled={isIngestingVideo}
-              className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm disabled:opacity-50"
             >
               {isIngestingVideo ? 'Ingesting Stream...' : 'Load Stream'}
             </button>
           </form>
 
-          {/* Pre-Indexed Benchmark Debates Selector */}
-          <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
-            <span className="text-[11px] font-mono text-slate-400 mr-1 whitespace-nowrap shrink-0">
-              Benchmarks:
-            </span>
-            {PRE_INDEXED_DEBATES.map((debate, index) => {
-              const isSelected = activeDebate.id === debate.id;
-              const shortNames = [
-                '01. StarTalk: Free Will (Tyson & Liu)',
-                '02. Wealth, Poverty & Politics (Sowell)',
-                '03. Altman & Fridman AGI Scaling',
-              ];
-              return (
-                <button
-                  key={debate.id}
-                  type="button"
-                  onClick={() => handleSelectPreIndexed(debate)}
-                  className={`px-2.5 py-1 text-xs rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
-                    isSelected
-                      ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/50 font-medium'
-                      : 'bg-[#07090E] text-slate-400 border-slate-800 hover:text-slate-200'
-                  }`}
-                >
-                  {shortNames[index] || debate.title}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Model Selector Dropdown & Compare Toggle */}
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="flex items-center gap-1.5 bg-[#07090E] border border-slate-800 rounded px-2.5 py-1">
-              <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <label htmlFor="model-select" className="sr-only">
-                Active Embedding Model
-              </label>
-              <select
-                id="model-select"
-                value={primaryModel}
-                onChange={(e) => setPrimaryModel(e.target.value as EmbeddingModelId)}
-                className="bg-transparent text-xs font-mono text-slate-200 focus:outline-none cursor-pointer"
-              >
-                {EMBEDDING_MODELS.map((m) => (
-                  <option key={m.id} value={m.id} className="bg-[#0B0E17] text-slate-100">
-                    {m.name} ({m.dimensions}D)
-                  </option>
-                ))}
-              </select>
+          {/* Right Toolbar Cluster: Benchmarks & Model Selector */}
+          <div className="flex items-center gap-3 shrink-0">
+            {/* Pre-Indexed Benchmark Debates Selector */}
+            <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
+              <span className="text-[11px] font-mono text-slate-400 mr-1 whitespace-nowrap shrink-0">
+                Benchmarks:
+              </span>
+              {PRE_INDEXED_DEBATES.map((debate, index) => {
+                const isSelected = activeDebate.id === debate.id;
+                const shortNames = [
+                  '01. Free Will',
+                  '02. Sowell',
+                  '03. Altman & Fridman',
+                ];
+                return (
+                  <button
+                    key={debate.id}
+                    type="button"
+                    onClick={() => handleSelectPreIndexed(debate)}
+                    title={debate.title}
+                    className={`px-2.5 py-1 text-xs rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                      isSelected
+                        ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/50 font-medium'
+                        : 'bg-[#07090E] text-slate-400 border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {shortNames[index] || debate.title}
+                  </button>
+                );
+              })}
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                const next = !isCompareMode;
-                setIsCompareMode(next);
-                if (next) setActiveSection('comparison');
-                else if (activeSection === 'comparison') setActiveSection('workspace');
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isCompareMode
-                  ? 'bg-pink-500/20 text-pink-300 border-pink-500/50'
-                  : 'bg-[#07090E] text-slate-300 border-slate-800 hover:border-slate-700'
-              }`}
-            >
-              <GitCompare className="w-3.5 h-3.5" />
-              <span>Compare Models</span>
-            </button>
+            {/* Model Selector Dropdown & Quick Compare Toggle */}
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 bg-[#07090E] border border-slate-800 rounded px-2.5 py-1.5 shrink-0">
+                <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <label htmlFor="model-select" className="sr-only">
+                  Active Embedding Model
+                </label>
+                <select
+                  id="model-select"
+                  value={primaryModel}
+                  onChange={(e) => setPrimaryModel(e.target.value as EmbeddingModelId)}
+                  className="bg-transparent text-xs font-mono text-slate-200 focus:outline-none cursor-pointer"
+                >
+                  {EMBEDDING_MODELS.map((m) => (
+                    <option key={m.id} value={m.id} className="bg-[#0B0E17] text-slate-100">
+                      {m.name} ({m.dimensions}D)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const nextMode = !(isCompareMode || activeSection === 'comparison');
+                  setIsCompareMode(nextMode);
+                  setActiveSection(nextMode ? 'comparison' : 'workspace');
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border transition-all cursor-pointer shrink-0 ${
+                  isCompareMode || activeSection === 'comparison'
+                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60 shadow-xs font-semibold'
+                    : 'bg-[#07090E] text-slate-300 border-slate-800 hover:text-slate-100 hover:border-slate-700'
+                }`}
+                title="Toggle Cross-Model Comparison Mode (2, 3, or 4 models)"
+              >
+                <GitCompare className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Compare Models</span>
+                <span
+                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                    selectedCompareModels.length > 2
+                      ? 'bg-cyan-400 text-slate-950'
+                      : 'bg-slate-800 text-slate-300 border border-slate-700'
+                  }`}
+                >
+                  {selectedCompareModels.length}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -927,9 +1021,9 @@ export default function App() {
           </div>
         ) : (
           /* Primary Split-Screen Dashboard (Left: Video & Diarized Transcript | Right: Circumplex & Analytics) */
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* LEFT PANEL (5 columns on 12-col grid): Video Playback & Synchronized Diarized Transcript */}
-            <div className="lg:col-span-5 flex flex-col gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            {/* LEFT PANEL (4 columns on 12-col grid): Video Playback & Synchronized Diarized Transcript */}
+            <div className="lg:col-span-4 xl:col-span-4 flex flex-col gap-4">
               {/* Stream Header & Execution Mode Bar */}
               <div className="bg-[#111827] border border-slate-800 rounded-md p-4 space-y-3">
                 <div className="flex items-start justify-between gap-3">
@@ -1108,408 +1202,808 @@ export default function App() {
               )}
 
               {/* Synchronized Diarized Sentence-by-Sentence Feed */}
-              <div className="bg-[#111827] border border-slate-800 rounded-md flex flex-col">
-                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                  <div className="text-xs font-semibold text-slate-200">
-                    Diarized Sentence Stream ({primaryUtterances.length} sentences)
+              {/* Diarized Sentence Stream (Collapsed by default below active sentence) */}
+              <div className="bg-[#111827] border border-slate-800 rounded-md flex flex-col overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsTranscriptExpanded((prev) => !prev)}
+                  className="w-full px-4 py-3 bg-[#111827] hover:bg-slate-800/80 border-b border-slate-800/80 flex items-center justify-between text-left transition-colors cursor-pointer"
+                  aria-expanded={isTranscriptExpanded}
+                >
+                  <div className="flex items-center gap-2">
+                    {isTranscriptExpanded ? (
+                      <ChevronUp className="w-4 h-4 text-cyan-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                    <span className="text-xs font-semibold text-slate-200">
+                      Transcript Cards ({primaryUtterances.length} sentences)
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      [{isTranscriptExpanded ? 'Click to collapse' : 'Collapsed · Click to expand'}]
+                    </span>
                   </div>
                   <div className="flex items-center gap-3 text-xs font-mono">
                     <span className="text-cyan-400">
-                      ■ {activeDebate.speakers.speaker_1.name}
+                      ■ {activeDebate.speakers.speaker_1.name.split(' ').pop()}
                     </span>
                     <span className="text-amber-400">
-                      ■ {activeDebate.speakers.speaker_2.name}
+                      ■ {activeDebate.speakers.speaker_2.name.split(' ').pop()}
                     </span>
                   </div>
-                </div>
+                </button>
 
-                <div
-                  ref={transcriptContainerRef}
-                  className="max-h-[460px] overflow-y-auto divide-y divide-slate-800/80"
-                >
-                  {primaryUtterances.map((utt) => {
-                    const isCurrentSentence =
-                      currentTime >= utt.timestamp && currentTime < utt.endTime;
-                    const isFutureInSync =
-                      executionMode === 'sync' && utt.timestamp > currentTime;
+                {isTranscriptExpanded && (
+                  <div
+                    ref={transcriptContainerRef}
+                    className="max-h-[460px] overflow-y-auto divide-y divide-slate-800/80 transition-all"
+                  >
+                    {primaryUtterances.map((utt) => {
+                      const isCurrentSentence =
+                        currentTime >= utt.timestamp && currentTime < utt.endTime;
+                      const isFutureInSync =
+                        executionMode === 'sync' && utt.timestamp > currentTime;
 
-                    return (
-                      <div
-                        key={utt.id}
-                        onClick={() => handleSeekToTimestamp(utt.timestamp, utt.id)}
-                        className={`p-3 transition-colors cursor-pointer ${
-                          isCurrentSentence
-                            ? 'bg-slate-800/85 ring-1 ring-inset ring-cyan-500/50'
-                            : isFutureInSync
-                            ? 'opacity-40 hover:opacity-80 bg-[#0B0E17]/40'
-                            : 'hover:bg-slate-900/60'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2 mb-1.5">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-mono text-slate-500 tabular-nums font-semibold">
-                              #{utt.sentenceIndex}
-                            </span>
-                            <span
-                              className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-mono font-bold ${
-                                utt.speakerId === 'speaker_1'
-                                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                              }`}
-                            >
-                              {utt.speakerId === 'speaker_1' ? 'S1' : 'S2'}
-                            </span>
-                            <span
-                              className={`text-xs font-semibold ${
-                                utt.speakerId === 'speaker_1' ? 'text-cyan-300' : 'text-amber-300'
-                              }`}
-                            >
-                              {utt.speakerName}
-                            </span>
-                            <span className="text-xs text-slate-500">·</span>
-                            <span className="text-[11px] font-mono tabular-nums text-slate-400">
-                              {formatTimestamp(utt.timestamp)} – {formatTimestamp(utt.endTime)}
-                            </span>
-                          </div>
-
-                          {isCurrentSentence && (
-                            <span className="text-[10px] font-mono text-cyan-400">
-                              ● ACTIVE SENTENCE
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-xs text-slate-200 leading-relaxed font-normal">
-                          "{utt.text}"
-                        </p>
-
-                        {/* Detected Schwartz Value Polarity Badges */}
-                        {utt.dominantBadges.length > 0 && (
-                          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono">
-                            {utt.dominantBadges.map((b) => (
-                              <button
-                                key={b.valueId}
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedValueId(b.valueId);
-                                }}
-                                className={`hover:underline cursor-pointer tabular-nums ${
-                                  b.polarity === '+' ? 'text-emerald-400' : 'text-rose-400'
+                      return (
+                        <div
+                          key={utt.id}
+                          onClick={() => handleSeekToTimestamp(utt.timestamp, utt.id)}
+                          className={`p-3 transition-colors cursor-pointer ${
+                            isCurrentSentence
+                              ? 'bg-slate-800/85 ring-1 ring-inset ring-cyan-500/50'
+                              : isFutureInSync
+                              ? 'opacity-40 hover:opacity-80 bg-[#0B0E17]/40'
+                              : 'hover:bg-slate-900/60'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-mono text-slate-500 tabular-nums font-semibold">
+                                #{utt.sentenceIndex}
+                              </span>
+                              <span
+                                className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-mono font-bold ${
+                                  utt.speakerId === 'speaker_1'
+                                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                 }`}
                               >
-                                {b.polarity}
-                                {b.name} ({b.delta >= 0 ? '+' : ''}
-                                {b.delta.toFixed(3)})
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                                {utt.speakerId === 'speaker_1' ? 'S1' : 'S2'}
+                              </span>
+                              <span
+                                className={`text-xs font-semibold ${
+                                  utt.speakerId === 'speaker_1' ? 'text-cyan-300' : 'text-amber-300'
+                                }`}
+                              >
+                                {utt.speakerName}
+                              </span>
+                              <span className="text-xs text-slate-500">·</span>
+                              <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                                {formatTimestamp(utt.timestamp)} – {formatTimestamp(utt.endTime)}
+                              </span>
+                            </div>
 
-                        {utt.verifierAudit && (
-                          <div className="mt-1.5 text-[11px] font-mono text-slate-400">
-                            Flash-Lite Audit: {utt.verifierAudit.rationale}
+                            {isCurrentSentence && (
+                              <span className="text-[10px] font-mono text-cyan-400">
+                                ● ACTIVE SENTENCE
+                              </span>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+
+                          <p className="text-xs text-slate-200 leading-relaxed font-normal">
+                            "{utt.text}"
+                          </p>
+
+                          {/* Detected Schwartz Value Polarity Badges */}
+                          {utt.dominantBadges.length > 0 && (
+                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono">
+                              {utt.dominantBadges.map((b) => (
+                                <button
+                                  key={b.valueId}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedValueId(b.valueId);
+                                  }}
+                                  className={`hover:underline cursor-pointer tabular-nums ${
+                                    b.polarity === '+' ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}
+                                >
+                                  {b.polarity}
+                                  {b.name} ({b.delta >= 0 ? '+' : ''}
+                                  {b.delta.toFixed(3)})
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          {utt.verifierAudit && (
+                            <div className="mt-1.5 text-[11px] font-mono text-slate-400">
+                              Flash-Lite Audit: {utt.verifierAudit.rationale}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* RIGHT PANEL (7 columns on 12-col grid): Schwartz Radar Circumplex, Value Inspector, Model Comparison & Vault */}
-            <div className="lg:col-span-7 flex flex-col gap-5">
-              {/* Top Circumplex Controls & Speaker / Comparison Header */}
-              <div className="bg-[#111827] border border-slate-800 rounded-md p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
-                  <div>
-                    <div className="text-xs font-mono text-slate-400">
-                      10-AXIS IPSATIVE CIRCUMPLEX · I_k = S_k - S̄
+            {/* RIGHT PANEL (8 columns on 12-col grid): Schwartz Radar Circumplex & Value Inspector Side-by-Side */}
+            <div className="lg:col-span-8 xl:col-span-8 flex flex-col gap-4">
+              {/* Side-by-Side Row: Circumplex Graph (Left: Expanded) & Value Inspector Window (Right: Lean Vertical Sidebar) */}
+              <div className="grid grid-cols-1 md:grid-cols-12 lg:grid-cols-12 gap-4 items-start">
+                {/* Circumplex Graph Card (Expanded Graph Window: 8 of 12 cols on md/lg, 9 of 12 on xl) */}
+                <div className="md:col-span-8 lg:col-span-8 xl:col-span-9 bg-[#111827] border border-slate-800 rounded-md p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 pb-3 border-b border-slate-800">
+                    <div>
+                      <div className="text-[11px] font-mono text-slate-400">
+                        10-AXIS IPSATIVE CIRCUMPLEX · I_k = S_k - S̄
+                      </div>
+                      <h2 className="text-sm font-bold text-slate-100 mt-0.5">
+                        {isCompareMode || activeSection === 'comparison'
+                          ? `Cross-Model Comparison (${selectedCompareModels.map((m) => MODEL_PALETTE[m]?.shortLabel || m).join(' vs. ')})`
+                          : activeSection === 'vault'
+                          ? 'History Vault Circumplex Overlay'
+                          : 'Real-Time Motivational Continuum'}
+                      </h2>
                     </div>
-                    <h2 className="text-base font-bold text-slate-100 mt-0.5">
-                      {isCompareMode || activeSection === 'comparison'
-                        ? `Multi-Model Architecture Comparison: ${primaryModel} vs. ${comparisonModel}`
-                        : activeSection === 'vault'
-                        ? 'Historical Vault Multi-Profile Circumplex Overlay'
-                        : 'Real-Time Schwartz Motivational Continuum'}
-                    </h2>
+
+                    {/* Speaker Selection & Save to Vault Controls */}
+                    <div className="flex items-center gap-1.5">
+                      {!(isCompareMode || activeSection === 'comparison') &&
+                        activeSection !== 'vault' && (
+                          <div className="flex items-center gap-1 p-0.5 bg-[#07090E] border border-slate-800 rounded text-xs">
+                            <button
+                              type="button"
+                              onClick={() => setSpeakerOverlayMode('both')}
+                              className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                speakerOverlayMode === 'both'
+                                  ? 'bg-slate-800 text-slate-100'
+                                  : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              Both
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSpeakerOverlayMode('speaker_1')}
+                              className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                speakerOverlayMode === 'speaker_1'
+                                  ? 'bg-cyan-500/20 text-cyan-300'
+                                  : 'text-slate-400 hover:text-cyan-300'
+                              }`}
+                            >
+                              {activeDebate.speakers.speaker_1.name.split(' ').pop()}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSpeakerOverlayMode('speaker_2')}
+                              className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                speakerOverlayMode === 'speaker_2'
+                                  ? 'bg-amber-500/20 text-amber-300'
+                                  : 'text-slate-400 hover:text-amber-300'
+                              }`}
+                            >
+                              {activeDebate.speakers.speaker_2.name.split(' ').pop()}
+                            </button>
+                          </div>
+                        )}
+
+                      <button
+                        type="button"
+                        onClick={handleSaveCurrentToVault}
+                        className="flex items-center gap-1 px-2.5 py-1 bg-[#07090E] hover:bg-slate-800 text-slate-200 border border-slate-700 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        title="Save active profiles to history vault"
+                      >
+                        {justSavedToast ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-emerald-400 text-[11px]">Saved</span>
+                          </>
+                        ) : (
+                          <>
+                            <BookmarkPlus className="w-3.5 h-3.5 text-cyan-400" />
+                            <span className="text-[11px]">Save</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Speaker Selection & Save to Vault Controls */}
-                  <div className="flex items-center gap-2">
-                    {!(isCompareMode || activeSection === 'comparison') &&
-                      activeSection !== 'vault' && (
-                        <div className="flex items-center gap-1 p-1 bg-[#07090E] border border-slate-800 rounded">
+                  {/* Multi-Model Comparison Secondary Bar when Compare Mode is active */}
+                  {(isCompareMode || activeSection === 'comparison') && (
+                    <div className="my-2 p-2.5 bg-[#07090E] border border-slate-800 rounded flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                      {/* Left: Target Speaker & Multi-Model Toggles */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Target Speaker Selector */}
+                        <div className="flex items-center gap-1 bg-[#111827] border border-slate-800 rounded p-0.5">
+                          <span className="text-[10px] font-mono text-slate-400 px-1">Target:</span>
                           <button
                             type="button"
-                            onClick={() => setSpeakerOverlayMode('both')}
-                            className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                              speakerOverlayMode === 'both'
-                                ? 'bg-slate-800 text-slate-100'
+                            onClick={() => setCompareSpeakerTarget('speaker_1')}
+                            className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors cursor-pointer ${
+                              compareSpeakerTarget === 'speaker_1'
+                                ? 'bg-cyan-500/20 text-cyan-300 font-semibold'
                                 : 'text-slate-400 hover:text-slate-200'
-                            }`}
-                          >
-                            Overlay Both
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSpeakerOverlayMode('speaker_1')}
-                            className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                              speakerOverlayMode === 'speaker_1'
-                                ? 'bg-cyan-500/20 text-cyan-300'
-                                : 'text-slate-400 hover:text-cyan-300'
                             }`}
                           >
                             {activeDebate.speakers.speaker_1.name.split(' ').pop()}
                           </button>
                           <button
                             type="button"
-                            onClick={() => setSpeakerOverlayMode('speaker_2')}
-                            className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                              speakerOverlayMode === 'speaker_2'
-                                ? 'bg-amber-500/20 text-amber-300'
-                                : 'text-slate-400 hover:text-amber-300'
+                            onClick={() => setCompareSpeakerTarget('speaker_2')}
+                            className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors cursor-pointer ${
+                              compareSpeakerTarget === 'speaker_2'
+                                ? 'bg-amber-500/20 text-amber-300 font-semibold'
+                                : 'text-slate-400 hover:text-slate-200'
                             }`}
                           >
                             {activeDebate.speakers.speaker_2.name.split(' ').pop()}
                           </button>
                         </div>
-                      )}
 
-                    <button
-                      type="button"
-                      onClick={handleSaveCurrentToVault}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-[#07090E] hover:bg-slate-800 text-slate-200 border border-slate-700 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      {justSavedToast ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="text-emerald-400">Saved to Vault</span>
-                        </>
-                      ) : (
-                        <>
-                          <BookmarkPlus className="w-3.5 h-3.5 text-cyan-400" />
-                          <span>Save Profiles</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
+                        {/* Multi-Model Toggle Buttons */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {EMBEDDING_MODELS.map((m) => {
+                            const isSelected = selectedCompareModels.includes(m.id);
+                            const palette = MODEL_PALETTE[m.id];
+                            return (
+                              <button
+                                key={`compare-toggle-${m.id}`}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    if (selectedCompareModels.length <= 2) return;
+                                    setSelectedCompareModels((prev) => prev.filter((id) => id !== m.id));
+                                  } else {
+                                    setSelectedCompareModels((prev) => [...prev, m.id]);
+                                  }
+                                }}
+                                className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-mono border transition-all cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-[#111827] border-slate-600 text-slate-100 shadow-xs font-semibold'
+                                    : 'bg-[#07090E] border-slate-800/80 text-slate-400 hover:text-slate-200'
+                                }`}
+                                title={
+                                  isSelected && selectedCompareModels.length <= 2
+                                    ? 'Minimum 2 models required for comparison'
+                                    : `Toggle ${m.name}`
+                                }
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{
+                                    backgroundColor: palette?.color || '#06B6D4',
+                                    opacity: isSelected ? 1 : 0.35,
+                                  }}
+                                />
+                                <span>{palette?.shortLabel || m.name}</span>
+                                <span className="text-[9px] text-slate-400 font-normal">({palette?.tag})</span>
+                              </button>
+                            );
+                          })}
 
-                {/* Model Comparison Secondary Bar when Compare Mode is active */}
-                {(isCompareMode || activeSection === 'comparison') && (
-                  <div className="my-3 p-3 bg-[#07090E] border border-slate-800 rounded flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-1.5 text-xs font-mono">
-                        <span className="text-cyan-400 font-semibold">Model A:</span>
-                        <select
-                          value={primaryModel}
-                          onChange={(e) => setPrimaryModel(e.target.value as EmbeddingModelId)}
-                          className="bg-[#111827] border border-slate-700 rounded px-2 py-1 text-slate-100"
-                        >
-                          {EMBEDDING_MODELS.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name}
-                            </option>
-                          ))}
-                        </select>
+                          {/* Quick Multi-Model Presets: 2 Models, 3 Models, All 4 Models */}
+                          <div className="flex items-center gap-1 bg-[#111827] border border-slate-800 rounded p-0.5">
+                            <span className="text-[10px] font-mono text-slate-400 px-1">Presets:</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedCompareModels(['gemini-embedding-2', 'local-minilm'])
+                              }
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
+                                selectedCompareModels.length === 2 &&
+                                selectedCompareModels.includes('gemini-embedding-2') &&
+                                selectedCompareModels.includes('local-minilm')
+                                  ? 'bg-cyan-500 text-slate-950 font-bold'
+                                  : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              2 Models
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedCompareModels([
+                                  'gemini-embedding-2',
+                                  'local-minilm',
+                                  'openai-small',
+                                ])
+                              }
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
+                                selectedCompareModels.length === 3
+                                  ? 'bg-cyan-500 text-slate-950 font-bold'
+                                  : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              3 Models
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedCompareModels(EMBEDDING_MODELS.map((m) => m.id))
+                              }
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
+                                selectedCompareModels.length === 4
+                                  ? 'bg-cyan-500 text-slate-950 font-bold'
+                                  : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              All 4 Models
+                            </button>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5 text-xs font-mono">
-                        <span className="text-pink-400 font-semibold">Model B:</span>
-                        <select
-                          value={comparisonModel}
-                          onChange={(e) => setComparisonModel(e.target.value as EmbeddingModelId)}
-                          className="bg-[#111827] border border-slate-700 rounded px-2 py-1 text-slate-100"
-                        >
-                          {EMBEDDING_MODELS.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 text-xs font-mono">
-                        <span className="text-slate-400">Subject:</span>
-                        <select
-                          value={compareSpeakerTarget}
-                          onChange={(e) =>
-                            setCompareSpeakerTarget(e.target.value as 'speaker_1' | 'speaker_2')
-                          }
-                          className="bg-[#111827] border border-slate-700 rounded px-2 py-1 text-slate-100"
-                        >
-                          <option value="speaker_1">
-                            {activeDebate.speakers.speaker_1.name}
-                          </option>
-                          <option value="speaker_2">
-                            {activeDebate.speakers.speaker_2.name}
-                          </option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-4 font-mono text-xs tabular-nums">
-                      <div>
-                        <span className="text-slate-400">Agreement Cosine: </span>
+                      {/* Right: Mean Inter-Model Agreement Metric */}
+                      <div className="font-mono text-[11px] tabular-nums text-slate-400 shrink-0">
+                        Mean Agreement:{' '}
                         <span className="text-emerald-400 font-bold">
-                          {(modelAgreement.agreementCosine * 100).toFixed(1)}%
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400">Mean |Δ|: </span>
-                        <span className="text-slate-200 font-semibold">
-                          {modelAgreement.meanAbsoluteDelta.toFixed(3)}
+                          {(multiModelAgreement.meanPairwiseCosine * 100).toFixed(1)}%
+                        </span>{' '}
+                        <span className="text-[10px] text-slate-400">
+                          ({selectedCompareModels.length} models)
                         </span>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Interactive SVG Radar Circumplex */}
-                <div className="py-2">
-                  <RadarCircumplex
-                    layers={activeRadarLayers}
-                    utterances={primaryUtterances}
-                    selectedValueId={selectedValueId}
-                    onSelectValue={setSelectedValueId}
-                    onSeekToTimestamp={handleSeekToTimestamp}
-                    showScatterPoints={showScatterPoints}
-                    showCentroidVectors={showCentroidVectors}
-                    upToTimestamp={effectiveCutoffTime}
-                  />
+                  {/* Interactive SVG Radar Circumplex */}
+                  <div className="py-1 flex justify-center">
+                    <RadarCircumplex
+                      layers={activeRadarLayers}
+                      utterances={primaryUtterances}
+                      selectedValueId={selectedValueId}
+                      onSelectValue={setSelectedValueId}
+                      onSeekToTimestamp={handleSeekToTimestamp}
+                      showScatterPoints={showScatterPoints}
+                      showCentroidVectors={showCentroidVectors}
+                      upToTimestamp={effectiveCutoffTime}
+                    />
+                  </div>
+
+                  {/* Circumplex Layer Legend & Net Motivational Centroid Vector Summary */}
+                  <div className="pt-3 border-t border-slate-800 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-3 text-xs">
+                        {activeRadarLayers.map((layer) => (
+                          <div key={layer.id} className="flex items-center gap-1.5">
+                            <span
+                              className="w-2.5 h-2.5 rounded-xs inline-block"
+                              style={{ backgroundColor: layer.color }}
+                            />
+                            <span className="font-semibold text-slate-200 text-xs">{layer.label}</span>
+                            <span className="text-slate-500 font-mono text-[10px] tabular-nums">
+                              (S̄={layer.profile.personalMean >= 0 ? '+' : ''}
+                              {layer.profile.personalMean.toFixed(2)})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Visual Layer Toggles */}
+                      <div className="flex items-center gap-2.5 text-[11px] font-mono">
+                        <label className="flex items-center gap-1 text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={showScatterPoints}
+                            onChange={(e) => setShowScatterPoints(e.target.checked)}
+                            className="accent-cyan-400 rounded"
+                          />
+                          <span>Scatter</span>
+                        </label>
+                        <label className="flex items-center gap-1 text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={showCentroidVectors}
+                            onChange={(e) => setShowCentroidVectors(e.target.checked)}
+                            className="accent-cyan-400 rounded"
+                          />
+                          <span>Centroid</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Circumplex Layer Legend & Net Motivational Centroid Vector Summary */}
-                <div className="pt-4 border-t border-slate-800 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-4 text-xs">
-                      {activeRadarLayers.map((layer) => (
-                        <div key={layer.id} className="flex items-center gap-2">
-                          <span
-                            className="w-3 h-3 rounded-xs inline-block"
-                            style={{ backgroundColor: layer.color }}
-                          />
-                          <span className="font-semibold text-slate-200">{layer.label}</span>
-                          <span className="text-slate-500 font-mono text-[11px] tabular-nums">
-                            (S̄ = {layer.profile.personalMean >= 0 ? '+' : ''}
-                            {layer.profile.personalMean.toFixed(2)})
-                          </span>
-                        </div>
-                      ))}
+                {/* Value Inspector Card (Lean Vertical Sidebar: 4 cols on md/lg, 3 cols on xl) */}
+                <div className="md:col-span-4 lg:col-span-4 xl:col-span-3 bg-[#111827] border border-slate-800 rounded-md p-3 space-y-2.5 sticky top-4">
+                  <div className="flex flex-col gap-1.5 pb-2 border-b border-slate-800">
+                    <div className="flex items-center gap-1.5 text-xs font-mono text-slate-300 min-w-0">
+                      <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <span className="truncate uppercase font-semibold tracking-wide text-slate-200">
+                        Value Inspector
+                      </span>
                     </div>
 
-                    {/* Visual Layer Toggles */}
-                    <div className="flex items-center gap-3 text-xs font-mono">
-                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={showScatterPoints}
-                          onChange={(e) => setShowScatterPoints(e.target.checked)}
-                          className="accent-cyan-400 rounded"
-                        />
-                        <span>Utterance Scatter</span>
-                      </label>
-                      <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={showCentroidVectors}
-                          onChange={(e) => setShowCentroidVectors(e.target.checked)}
-                          className="accent-cyan-400 rounded"
-                        />
-                        <span>Centroid Vector</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Bipolar Dimension Readouts for Each Layer */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {activeRadarLayers.slice(0, 2).map((layer) => (
-                      <div
-                        key={`bipolar-${layer.id}`}
-                        className="p-3 bg-[#07090E] border border-slate-800 rounded space-y-1.5"
+                    {/* Quick Axis Switcher: Full-width All Dimensions button + 2-column grid for the 10 Schwartz values */}
+                    <div className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedValueId('all')}
+                        className={`w-full py-1.5 text-[11px] font-mono rounded transition-colors cursor-pointer font-bold ${
+                          selectedValueId === 'all'
+                            ? 'bg-cyan-500 text-slate-950 shadow-xs'
+                            : 'bg-[#07090E] text-slate-300 hover:text-slate-100 hover:bg-slate-800/80 border border-slate-800'
+                        }`}
                       >
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold" style={{ color: layer.color }}>
-                            {layer.label} · Net Centroid
-                          </span>
-                          <span className="font-mono text-[11px] text-slate-400 tabular-nums">
-                            θ = {layer.profile.centroid.angleDeg.toFixed(0)}°
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 text-[11px] font-mono tabular-nums">
-                          <div>
-                            <span className="text-slate-400 block">Openness vs. Conserv (X):</span>
-                            <span className="text-slate-100 font-semibold">
-                              {layer.profile.centroid.opennessVsConservation >= 0 ? '+' : ''}
-                              {layer.profile.centroid.opennessVsConservation.toFixed(3)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 block">Transcend vs. Enhance (Y):</span>
-                            <span className="text-slate-100 font-semibold">
-                              {layer.profile.centroid.transcendenceVsEnhancement >= 0 ? '+' : ''}
-                              {layer.profile.centroid.transcendenceVsEnhancement.toFixed(3)}
-                            </span>
-                          </div>
-                        </div>
+                        All Dimensions
+                      </button>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {SCHWARTZ_CIRCUMPLEX_AXES.map((ax) => (
+                          <button
+                            key={ax.id}
+                            type="button"
+                            title={ax.domain.replace(/_/g, ' ')}
+                            onClick={() => setSelectedValueId(ax.id)}
+                            className={`px-2.5 py-1.5 text-center text-[11px] font-mono rounded transition-colors cursor-pointer truncate font-medium ${
+                              selectedValueId === ax.id
+                                ? 'bg-cyan-500 text-slate-950 font-bold shadow-xs'
+                                : 'bg-[#07090E] text-slate-300 hover:text-slate-100 hover:bg-slate-800/80 border border-slate-800'
+                            }`}
+                          >
+                            {ax.name}
+                          </button>
+                        ))}
                       </div>
-                    ))}
+                    </div>
                   </div>
+
+                  {/* View Content: Ultra-Compact Multi-Dimensional Bipolar Report for ALL vs. Single Value Axis Deep-Dive */}
+                  {selectedValueId === 'all' ? (
+                    <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+                      {activeRadarLayers.map((layer) => {
+                        const { centroid } = layer.profile;
+                        const xVal = centroid.opennessVsConservation;
+                        const yVal = centroid.transcendenceVsEnhancement;
+                        const xPercent = Math.min(100, Math.max(0, ((xVal + 1) / 2) * 100));
+                        const yPercent = Math.min(100, Math.max(0, ((yVal + 1) / 2) * 100));
+
+                        return (
+                          <div
+                            key={`bipolar-inspector-${layer.id}`}
+                            className="p-2.5 bg-[#07090E] border border-slate-800/90 rounded space-y-2"
+                          >
+                            {/* Compact Speaker/Model & Vector Polarity Header */}
+                            <div className="flex items-center justify-between text-xs border-b border-slate-800/70 pb-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: layer.color }}
+                                />
+                                <span className="font-semibold text-slate-100 truncate text-[11px]">
+                                  {layer.label}
+                                </span>
+                              </div>
+                              <div className="font-mono text-[10px] tabular-nums text-slate-300 shrink-0">
+                                <span className="text-cyan-400 font-semibold">θ={centroid.angleDeg.toFixed(0)}°</span>
+                                <span className="text-slate-600 mx-1">·</span>
+                                <span className="text-slate-400">r={centroid.magnitude.toFixed(2)}</span>
+                              </div>
+                            </div>
+
+                            {/* Dimension 1: Openness vs Conservation */}
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between text-[10px] font-mono">
+                                <span className="text-slate-400">Openness / Conserv</span>
+                                <span
+                                  className={`font-semibold tabular-nums ${
+                                    xVal >= 0 ? 'text-cyan-300' : 'text-amber-300'
+                                  }`}
+                                >
+                                  {xVal >= 0 ? '+' : ''}{xVal.toFixed(2)}
+                                </span>
+                              </div>
+                              <div className="relative h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                <div
+                                  className="absolute top-0 bottom-0 w-2 bg-cyan-400 rounded-full -translate-x-1/2 shadow-xs"
+                                  style={{ left: `${xPercent}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-[8px] font-mono text-slate-500">
+                                <span>Conserv</span>
+                                <span className={xVal >= 0 ? 'text-cyan-400 font-medium' : 'text-amber-400 font-medium'}>
+                                  {xVal >= 0 ? 'Openness' : 'Conserv.'}
+                                </span>
+                                <span>Openness</span>
+                              </div>
+                            </div>
+
+                            {/* Dimension 2: Self-Transcendence vs Self-Enhancement */}
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between text-[10px] font-mono">
+                                <span className="text-slate-400">Transcend / Enhance</span>
+                                <span
+                                  className={`font-semibold tabular-nums ${
+                                    yVal >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                                  }`}
+                                >
+                                  {yVal >= 0 ? '+' : ''}{yVal.toFixed(2)}
+                                </span>
+                              </div>
+                              <div className="relative h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                <div
+                                  className="absolute top-0 bottom-0 w-2 bg-emerald-400 rounded-full -translate-x-1/2 shadow-xs"
+                                  style={{ left: `${yPercent}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-[8px] font-mono text-slate-500">
+                                <span>Enhance</span>
+                                <span className={yVal >= 0 ? 'text-emerald-400 font-medium' : 'text-rose-400 font-medium'}>
+                                  {yVal >= 0 ? 'Transcend.' : 'Enhance.'}
+                                </span>
+                                <span>Transcend</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[9px] font-mono text-slate-500 pt-1 border-t border-slate-800/50">
+                              <span>S̄: {layer.profile.personalMean >= 0 ? '+' : ''}{layer.profile.personalMean.toFixed(2)}</span>
+                              <span className="text-slate-400">Click pill for quotes</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    /* Single Value Axis Drilldown (Vertical Sidebar & Scrollable) */
+                    <div className="max-h-[480px] overflow-y-auto space-y-2.5 pr-1">
+                      {(isCompareMode || activeSection === 'comparison'
+                        ? multiModelProfiles.map((mp) => mp.profile)
+                        : [speaker1Profile, speaker2Profile]
+                      ).map((sp) => {
+                        const axisScore = sp.scores[selectedValueId];
+                        if (!axisScore) return null;
+                        return (
+                          <div
+                            key={sp.speakerId}
+                            className="p-2.5 bg-[#07090E] border border-slate-800 rounded space-y-2"
+                          >
+                            <div className="flex flex-col gap-1 border-b border-slate-800 pb-1.5">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-semibold truncate" style={{ color: sp.color }}>
+                                  {sp.speakerName}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  Raw S: <strong className="text-slate-200">{axisScore.rawCumulativeScore >= 0 ? '+' : ''}{axisScore.rawCumulativeScore.toFixed(2)}</strong>
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between text-[10px] font-mono">
+                                <span className="text-slate-400">Ipsative I:</span>
+                                <strong className={axisScore.ipsativeScore >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                  {axisScore.ipsativeScore >= 0 ? '+' : ''}{axisScore.ipsativeScore.toFixed(2)}
+                                </strong>
+                              </div>
+                            </div>
+
+                            {/* Endorsing Quotes */}
+                            <div className="space-y-1">
+                              <div className="text-[10px] font-mono text-emerald-400">
+                                Endorsing (+Δ, n={axisScore.endorsementCount})
+                              </div>
+                              {axisScore.topEndorsingQuotes.length === 0 ? (
+                                <p className="text-[11px] text-slate-500 italic">No +τ utterances yet.</p>
+                              ) : (
+                                axisScore.topEndorsingQuotes.slice(0, 2).map((q) => (
+                                  <div
+                                    key={q.utteranceId}
+                                    onClick={() => handleSeekToTimestamp(q.timestamp, q.utteranceId)}
+                                    className="p-1.5 bg-[#111827] hover:bg-slate-800/80 border border-slate-800 rounded text-xs cursor-pointer transition-colors"
+                                  >
+                                    <div className="flex justify-between font-mono text-[9px] text-emerald-400 mb-0.5 tabular-nums">
+                                      <span>#{q.sentenceIndex} (@{formatTimestamp(q.timestamp)})</span>
+                                      <span>Δ = +{q.delta.toFixed(3)}</span>
+                                    </div>
+                                    <p className="text-slate-200 line-clamp-2 text-[11px]">"{q.text}"</p>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+
+                            {/* Opposing Quotes */}
+                            {axisScore.topOpposingQuotes.length > 0 && (
+                              <div className="space-y-1 pt-0.5">
+                                <div className="text-[10px] font-mono text-rose-400">
+                                  Opposing (-Δ, n={axisScore.rejectionCount})
+                                </div>
+                                {axisScore.topOpposingQuotes.slice(0, 2).map((q) => (
+                                  <div
+                                    key={q.utteranceId}
+                                    onClick={() => handleSeekToTimestamp(q.timestamp, q.utteranceId)}
+                                    className="p-1.5 bg-[#111827] hover:bg-slate-800/80 border border-slate-800 rounded text-xs cursor-pointer transition-colors"
+                                  >
+                                    <div className="flex justify-between font-mono text-[9px] text-rose-400 mb-0.5 tabular-nums">
+                                      <span>#{q.sentenceIndex} (@{formatTimestamp(q.timestamp)})</span>
+                                      <span>Δ = {q.delta.toFixed(3)}</span>
+                                    </div>
+                                    <p className="text-slate-200 line-clamp-2 text-[11px]">"{q.text}"</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Conditional Sub-Panels: Model Divergence Matrix OR History Vault OR Value Inspector Card */}
+              {/* Conditional Sub-Panels: Multi-Model Divergence & Consensus Matrix OR History Vault */}
               {(isCompareMode || activeSection === 'comparison') && (
-                <div className="bg-[#111827] border border-slate-800 rounded-md p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-100">
-                      Per-Value Model Divergence Matrix ({primaryModel} vs. {comparisonModel})
-                    </h3>
-                    <span className="text-xs font-mono text-slate-400 tabular-nums">
-                      10D Profile Cosine Agreement:{' '}
-                      {(modelAgreement.agreementCosine * 100).toFixed(2)}%
-                    </span>
+                <div className="bg-[#111827] border border-slate-800 rounded-md p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+                    <div>
+                      <div className="text-[11px] font-mono text-cyan-400 font-semibold uppercase tracking-wider">
+                        Cross-Model Consensus Matrix ({selectedCompareModels.length} Models)
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-100 mt-0.5">
+                        {activeDebate.speakers[compareSpeakerTarget].name} ·{' '}
+                        <span className="font-normal text-slate-400">
+                          {selectedCompareModels.map((m) => MODEL_PALETTE[m]?.shortLabel || m).join(' vs. ')}
+                        </span>
+                      </h3>
+                    </div>
+                    <div className="flex items-center gap-2 font-mono text-xs tabular-nums text-slate-400">
+                      <span>
+                        Mean Agreement:{' '}
+                        <strong className="text-emerald-400">
+                          {(multiModelAgreement.meanPairwiseCosine * 100).toFixed(1)}%
+                        </strong>
+                      </span>
+                      <span className="text-slate-600">·</span>
+                      <span>
+                        Mean Spread:{' '}
+                        <strong className="text-cyan-400">
+                          {multiModelAgreement.meanSpread.toFixed(3)}
+                        </strong>
+                      </span>
+                    </div>
                   </div>
+
+                  {/* Pairwise Inter-Model Agreement Correlations (When comparing 3 or 4 models) */}
+                  {selectedCompareModels.length >= 3 && multiModelAgreement.pairwiseAgreements.length > 0 && (
+                    <div className="p-2.5 bg-[#07090E] border border-slate-800 rounded space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                        <span className="uppercase tracking-wider font-semibold">
+                          Pairwise Correlation Matrix ({multiModelAgreement.pairwiseAgreements.length} Pairs)
+                        </span>
+                        <span className="text-slate-500">10D Profile Cosine Similarity</span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 pt-1">
+                        {multiModelAgreement.pairwiseAgreements.map((pair, idx) => {
+                          const palA = MODEL_PALETTE[pair.modelA as EmbeddingModelId];
+                          const palB = MODEL_PALETTE[pair.modelB as EmbeddingModelId];
+                          return (
+                            <div
+                              key={`pair-${idx}`}
+                              className="p-1.5 bg-[#111827] border border-slate-800 rounded flex items-center justify-between gap-1 text-[11px] font-mono"
+                            >
+                              <div className="flex items-center gap-1 min-w-0 truncate">
+                                <span style={{ color: palA?.color || '#06B6D4' }} className="font-semibold">
+                                  {palA?.shortLabel || pair.modelA}
+                                </span>
+                                <span className="text-slate-500">↔</span>
+                                <span style={{ color: palB?.color || '#EC4899' }} className="font-semibold">
+                                  {palB?.shortLabel || pair.modelB}
+                                </span>
+                              </div>
+                              <span
+                                className={`font-bold tabular-nums shrink-0 ${
+                                  pair.cosine >= 0.95
+                                    ? 'text-emerald-400'
+                                    : pair.cosine >= 0.85
+                                    ? 'text-cyan-400'
+                                    : 'text-amber-400'
+                                }`}
+                              >
+                                {(pair.cosine * 100).toFixed(1)}%
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Dynamic Multi-Model Divergence Table (Supports 2, 3, or all 4 models) */}
                   <div className="overflow-x-auto border border-slate-800 rounded">
                     <table className="w-full text-left border-collapse text-xs font-mono tabular-nums">
                       <thead>
                         <tr className="bg-[#07090E] border-b border-slate-800 text-slate-400">
-                          <th className="py-2 px-3">Schwartz Value</th>
-                          <th className="py-2 px-3 text-right text-cyan-400">
-                            Model A ({primaryModel})
+                          <th className="py-2.5 px-3 whitespace-nowrap font-sans font-semibold">
+                            Schwartz Value
                           </th>
-                          <th className="py-2 px-3 text-right text-pink-400">
-                            Model B ({comparisonModel})
+                          {selectedCompareModels.map((mId) => {
+                            const pal = MODEL_PALETTE[mId];
+                            return (
+                              <th
+                                key={`col-${mId}`}
+                                className="py-2.5 px-3 text-right whitespace-nowrap"
+                                style={{ color: pal?.color || '#06B6D4' }}
+                              >
+                                {pal?.shortLabel || mId}{' '}
+                                <span className="text-[10px] opacity-70">({pal?.tag})</span>
+                              </th>
+                            );
+                          })}
+                          <th className="py-2.5 px-3 text-right whitespace-nowrap text-slate-300">
+                            Spread (Δ)
                           </th>
-                          <th className="py-2 px-3 text-right">Signed Δ (A - B)</th>
+                          <th className="py-2.5 px-3 text-center whitespace-nowrap text-slate-400">
+                            Consensus
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800">
-                        {modelAgreement.divergences.map((row) => (
-                          <tr
-                            key={row.valueId}
-                            onClick={() => setSelectedValueId(row.valueId)}
-                            className="hover:bg-slate-900/60 cursor-pointer"
-                          >
-                            <td className="py-2 px-3 font-sans font-medium text-slate-200">
-                              {row.name}
-                            </td>
-                            <td className="py-2 px-3 text-right text-cyan-300">
-                              {row.scoreA >= 0 ? '+' : ''}
-                              {row.scoreA.toFixed(3)}
-                            </td>
-                            <td className="py-2 px-3 text-right text-pink-300">
-                              {row.scoreB >= 0 ? '+' : ''}
-                              {row.scoreB.toFixed(3)}
-                            </td>
-                            <td className="py-2 px-3 text-right text-slate-300">
-                              {row.signedDiff >= 0 ? '+' : ''}
-                              {row.signedDiff.toFixed(3)}
-                            </td>
-                          </tr>
-                        ))}
+                        {multiModelAgreement.divergences.map((row) => {
+                          const isHighSpread = row.spread >= 0.45;
+                          const isMediumSpread = row.spread >= 0.22 && row.spread < 0.45;
+
+                          return (
+                            <tr
+                              key={row.valueId}
+                              onClick={() => setSelectedValueId(row.valueId)}
+                              className={`hover:bg-slate-900/60 cursor-pointer transition-colors ${
+                                selectedValueId === row.valueId ? 'bg-slate-800/60 ring-1 ring-inset ring-cyan-500/40' : ''
+                              }`}
+                              title={`Click to inspect ${row.name} in Value Inspector`}
+                            >
+                              <td className="py-2.5 px-3 font-sans font-medium text-slate-200 whitespace-nowrap">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{row.name}</span>
+                                  {selectedValueId === row.valueId && (
+                                    <span className="text-[9px] font-mono text-cyan-400 font-bold">●</span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {selectedCompareModels.map((mId) => {
+                                const score = row.scoresByModel[mId];
+                                return (
+                                  <td
+                                    key={`score-${row.valueId}-${mId}`}
+                                    className="py-2.5 px-3 text-right whitespace-nowrap font-semibold"
+                                  >
+                                    {score !== undefined ? (
+                                      <span
+                                        className={
+                                          score >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                                        }
+                                      >
+                                        {score >= 0 ? '+' : ''}
+                                        {score.toFixed(3)}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-600">—</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+
+                              <td className="py-2.5 px-3 text-right text-slate-300 font-bold whitespace-nowrap">
+                                {row.spread.toFixed(3)}
+                              </td>
+
+                              <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                {isHighSpread ? (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                                    High Spread
+                                  </span>
+                                ) : isMediumSpread ? (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                    Moderate
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                    High Consensus
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1517,7 +2011,7 @@ export default function App() {
               )}
 
               {activeSection === 'vault' && (
-                <div className="bg-[#111827] border border-slate-800 rounded-md p-5 space-y-3">
+                <div className="bg-[#111827] border border-slate-800 rounded-md p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-sm font-semibold text-slate-100">
@@ -1593,132 +2087,6 @@ export default function App() {
                   )}
                 </div>
               )}
-
-              {/* Value Inspector Card (Interactive Axis Drilldown) */}
-              <div className="bg-[#111827] border border-slate-800 rounded-md p-5 space-y-4">
-                <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-slate-800">
-                  <div>
-                    <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-                      <Compass className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>
-                        VALUE AXIS INSPECTOR · {selectedValueAxis.angleDeg}° ·{' '}
-                        {selectedValueAxis.domain.replace(/_/g, ' ')}
-                      </span>
-                    </div>
-                    <h3 className="text-base font-bold text-slate-100 mt-0.5">
-                      {selectedValueAxis.name} — {selectedValueAxis.motivationalGoal}
-                    </h3>
-                  </div>
-
-                  {/* Quick Axis Switcher Pills */}
-                  <div className="flex flex-wrap gap-1">
-                    {SCHWARTZ_CIRCUMPLEX_AXES.map((ax) => (
-                      <button
-                        key={ax.id}
-                        type="button"
-                        onClick={() => setSelectedValueId(ax.id)}
-                        className={`px-2 py-1 text-[10px] font-mono rounded transition-colors cursor-pointer ${
-                          selectedValueId === ax.id
-                            ? 'bg-cyan-500 text-slate-950 font-bold'
-                            : 'bg-[#07090E] text-slate-400 hover:text-slate-200 border border-slate-800'
-                        }`}
-                      >
-                        {ax.shortLabel}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Speaker Score Comparison for Selected Value */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {[speaker1Profile, speaker2Profile].map((sp) => {
-                    const axisScore = sp.scores[selectedValueId];
-                    if (!axisScore) return null;
-                    return (
-                      <div
-                        key={sp.speakerId}
-                        className="p-3.5 bg-[#07090E] border border-slate-800 rounded space-y-3"
-                      >
-                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                          <span className="text-xs font-semibold" style={{ color: sp.color }}>
-                            {sp.speakerName}
-                          </span>
-                          <div className="text-xs font-mono tabular-nums space-x-3">
-                            <span className="text-slate-400">
-                              Raw S_k:{' '}
-                              <strong className="text-slate-200">
-                                {axisScore.rawCumulativeScore >= 0 ? '+' : ''}
-                                {axisScore.rawCumulativeScore.toFixed(2)}
-                              </strong>
-                            </span>
-                            <span className="text-slate-400">
-                              Ipsative I_k:{' '}
-                              <strong
-                                className={
-                                  axisScore.ipsativeScore >= 0
-                                    ? 'text-emerald-400'
-                                    : 'text-rose-400'
-                                }
-                              >
-                                {axisScore.ipsativeScore >= 0 ? '+' : ''}
-                                {axisScore.ipsativeScore.toFixed(2)}
-                              </strong>
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Top Contributing Endorsing Quotes */}
-                        <div className="space-y-1.5">
-                          <div className="text-[11px] font-mono text-emerald-400">
-                            Endorsing Utterances (+Δ, n={axisScore.endorsementCount})
-                          </div>
-                          {axisScore.topEndorsingQuotes.length === 0 ? (
-                            <p className="text-xs text-slate-500 italic">
-                              No utterances exceeded +τ threshold on this axis yet.
-                            </p>
-                          ) : (
-                            axisScore.topEndorsingQuotes.map((q) => (
-                              <div
-                                key={q.utteranceId}
-                                onClick={() => handleSeekToTimestamp(q.timestamp, q.utteranceId)}
-                                className="p-2 bg-[#111827] hover:bg-slate-800/80 border border-slate-800 rounded text-xs cursor-pointer transition-colors"
-                              >
-                                <div className="flex justify-between font-mono text-[10px] text-emerald-400 mb-0.5 tabular-nums">
-                                  <span>#{q.sentenceIndex} · {q.speakerName} (@{formatTimestamp(q.timestamp)})</span>
-                                  <span>Δ = +{q.delta.toFixed(3)}</span>
-                                </div>
-                                <p className="text-slate-200 line-clamp-2">"{q.text}"</p>
-                              </div>
-                            ))
-                          )}
-                        </div>
-
-                        {/* Top Opposing / Rejecting Quotes */}
-                        {axisScore.topOpposingQuotes.length > 0 && (
-                          <div className="space-y-1.5 pt-1">
-                            <div className="text-[11px] font-mono text-rose-400">
-                              Opposing / Subordinating Utterances (-Δ, n={axisScore.rejectionCount})
-                            </div>
-                            {axisScore.topOpposingQuotes.map((q) => (
-                              <div
-                                key={q.utteranceId}
-                                onClick={() => handleSeekToTimestamp(q.timestamp, q.utteranceId)}
-                                className="p-2 bg-[#111827] hover:bg-slate-800/80 border border-slate-800 rounded text-xs cursor-pointer transition-colors"
-                              >
-                                <div className="flex justify-between font-mono text-[10px] text-rose-400 mb-0.5 tabular-nums">
-                                  <span>#{q.sentenceIndex} · {q.speakerName} (@{formatTimestamp(q.timestamp)})</span>
-                                  <span>Δ = {q.delta.toFixed(3)}</span>
-                                </div>
-                                <p className="text-slate-200 line-clamp-2">"{q.text}"</p>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           </div>
         )}

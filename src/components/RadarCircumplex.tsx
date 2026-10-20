@@ -25,7 +25,7 @@ export interface RadarPolygonLayer {
 interface RadarCircumplexProps {
   layers: RadarPolygonLayer[];
   utterances: EvaluatedUtterance[];
-  selectedValueId: SchwartzValueId;
+  selectedValueId: SchwartzValueId | 'all';
   onSelectValue: (valueId: SchwartzValueId) => void;
   onSeekToTimestamp: (seconds: number, utteranceId?: string) => void;
   showScatterPoints?: boolean;
@@ -93,7 +93,7 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
     <div className="relative w-full flex flex-col items-center select-none">
       <svg
         viewBox={`0 0 ${size} ${size}`}
-        className="w-full max-w-[580px] aspect-square cursor-crosshair overflow-visible"
+        className="w-full max-w-[620px] aspect-square cursor-crosshair overflow-visible"
         role="img"
         aria-label="Schwartz 10-Axis Circumplex Radar Chart"
       >
@@ -250,13 +250,13 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                 fill={isSelected ? axis.color : '#475569'}
               />
 
-              {/* Axis Vertex Label + Degree */}
+              {/* Axis Vertex Label (Clean value name without behind-the-scenes placement degrees) */}
               <g transform={`translate(${labelPt.x}, ${labelPt.y})`}>
                 <rect
-                  x={-48}
-                  y={-15}
-                  width={96}
-                  height={30}
+                  x={-44}
+                  y={-12}
+                  width={88}
+                  height={24}
                   rx={4}
                   fill={isSelected ? '#1E293B' : 'rgba(7, 9, 14, 0.85)'}
                   stroke={isSelected ? axis.color : '#1E293B'}
@@ -264,23 +264,13 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                 />
                 <text
                   x={0}
-                  y={-3}
+                  y={0}
                   textAnchor="middle"
                   dominantBaseline="middle"
                   fill={isSelected ? '#F8FAFC' : '#CBD5E1'}
                   className="text-[10.5px] font-semibold tracking-tight"
                 >
                   {axis.name}
-                </text>
-                <text
-                  x={0}
-                  y={9}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fill={isSelected ? axis.color : '#64748B'}
-                  className="text-[9px] font-mono tabular-nums"
-                >
-                  {axis.angleDeg}° {axis.id === SchwartzValueId.HEDONISM ? '· SHARED' : ''}
                 </text>
               </g>
             </g>
@@ -359,12 +349,12 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                   key={`scatter-${u.id}-${axis.id}`}
                   cx={pt.x}
                   cy={pt.y}
-                  r={3.2}
+                  r={3.5}
                   fill={dotColor}
                   fillOpacity={0.85}
                   stroke="#07090E"
                   strokeWidth={1}
-                  className="cursor-pointer hover:scale-150 transition-transform"
+                  className="cursor-pointer hover:stroke-white hover:stroke-[2px] hover:fill-opacity-100 transition-colors"
                   onMouseEnter={() =>
                     setHoveredDot({
                       utteranceId: u.id,

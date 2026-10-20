@@ -198,83 +198,45 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
       </div>
 
       {/* Precision Telemetry Scrubber & Playback Controls */}
-      <div className="p-3 border-t border-slate-800 space-y-2.5">
-        {/* Diarized Speaker Timeline Bar */}
+      <div className="p-2.5 border-t border-slate-800 space-y-2">
+        {/* Interactive Sentence Splits Slider Bar */}
         <div
-          className="relative h-5 bg-[#07090E] border border-slate-800 rounded overflow-hidden cursor-pointer"
-          onClick={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-            const targetSec = ratio * durationSeconds;
-            onTimeUpdate(targetSec);
-            if (playerRef.current?.seekTo) {
-              try {
-                playerRef.current.seekTo(targetSec, true);
-              } catch (_err) {
-                // Ignore
-              }
-            }
-          }}
-          title="Click anywhere on timeline to scrub playhead and inspect historical value profile state"
+          className="relative h-6 bg-[#07090E] border border-slate-800 rounded overflow-hidden group cursor-ew-resize select-none"
+          title="Sentence splits scrubber: drag or click to scrub video playhead"
         >
+          {/* Diarized Speaker Sentence Segments */}
           {turns.map((t) => {
             const leftPct = (t.timestamp / durationSeconds) * 100;
-            const widthPct = Math.max(1, ((t.endTime - t.timestamp) / durationSeconds) * 100);
+            const widthPct = Math.max(0.6, ((t.endTime - t.timestamp) / durationSeconds) * 100);
             const isSpeaker1 = t.speakerId === 'speaker_1';
             const isEvaluatedAtTime = t.timestamp <= currentTime;
             return (
               <div
                 key={t.id}
                 style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                className={`absolute top-0 bottom-0 border-r border-[#07090E] transition-opacity ${
+                className={`absolute top-0 bottom-0 border-r border-[#07090E]/60 transition-opacity ${
                   isSpeaker1 ? 'bg-cyan-500' : 'bg-amber-500'
-                } ${isEvaluatedAtTime ? 'opacity-70' : 'opacity-20'}`}
+                } ${isEvaluatedAtTime ? 'opacity-75' : 'opacity-25'}`}
               />
             );
           })}
 
-          {/* Playhead Needle */}
+          {/* Playhead Needle and Scrub Handle */}
           <div
-            style={{ left: `${Math.min(100, (currentTime / durationSeconds) * 100)}%` }}
-            className="absolute top-0 bottom-0 w-0.5 bg-white shadow-[0_0_6px_#ffffff]"
-          />
-        </div>
-
-        {/* Transport Bar */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={togglePlay}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-medium text-xs rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              <span>{isPlaying ? 'Pause Stream' : 'Play Sync'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleReset}
-              className="p-1.5 text-slate-400 hover:text-slate-200 bg-slate-900 border border-slate-800 rounded transition-colors cursor-pointer"
-              title="Reset Playhead to 00:00"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={toggleMute}
-              className="p-1.5 text-slate-400 hover:text-slate-200 bg-slate-900 border border-slate-800 rounded transition-colors cursor-pointer"
-              title={isMuted ? 'Unmute Player' : 'Mute Player'}
-            >
-              {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-            </button>
+            style={{
+              left: `${Math.min(100, Math.max(0, (currentTime / (durationSeconds || 1)) * 100))}%`,
+            }}
+            className="absolute top-0 bottom-0 w-0.5 bg-white shadow-[0_0_8px_#ffffff] z-10 pointer-events-none"
+          >
+            <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2 h-4 bg-white border border-slate-900 rounded-[2px] shadow-md ring-1 ring-cyan-400" />
           </div>
 
-          {/* Fine Range Scrubber */}
+          {/* Integrated Native Range Scrubber (Directly over the Sentence Splits Bar) */}
           <input
             type="range"
             min={0}
-            max={durationSeconds}
-            step={0.5}
+            max={durationSeconds || 100}
+            step={0.25}
             value={currentTime}
             onChange={(e) => {
               const sec = parseFloat(e.target.value);
@@ -283,17 +245,48 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
                 try {
                   playerRef.current.seekTo(sec, true);
                 } catch (_err) {
-                  // Ignore
+                  // Handled by synthetic clock
                 }
               }
             }}
-            className="flex-1 accent-cyan-400 h-1 bg-slate-800 rounded cursor-pointer"
-            aria-label="Timeline playhead scrubber"
+            className="absolute inset-0 w-full h-full opacity-0 cursor-ew-resize z-20"
+            aria-label="Sentence splits playback scrubber"
           />
+        </div>
 
-          <div className="font-mono text-xs tabular-nums text-slate-300 shrink-0">
+        {/* Compact Transport Bar (Without Redundant Slider) */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={togglePlay}
+              className="flex items-center gap-1.5 px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+              <span>{isPlaying ? 'Pause' : 'Play'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              className="p-1 text-slate-400 hover:text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded transition-colors cursor-pointer"
+              title="Reset Playhead to 00:00"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleMute}
+              className="p-1 text-slate-400 hover:text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded transition-colors cursor-pointer"
+              title={isMuted ? 'Unmute Player' : 'Mute Player'}
+            >
+              {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+
+          {/* Time Telemetry Readout */}
+          <div className="flex items-center gap-2 font-mono text-xs tabular-nums text-slate-300 shrink-0">
             <span className="text-cyan-400 font-semibold">{formatTimestamp(currentTime)}</span>
-            <span className="text-slate-600 mx-1">/</span>
+            <span className="text-slate-600">/</span>
             <span className="text-slate-400">{formatTimestamp(durationSeconds)}</span>
           </div>
         </div>

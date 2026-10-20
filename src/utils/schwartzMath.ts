@@ -566,6 +566,108 @@ export function computeModelAgreement(
   };
 }
 
+export interface MultiModelComparisonResult {
+  meanPairwiseCosine: number;
+  meanSpread: number;
+  pairwiseAgreements: Array<{
+    modelA: string;
+    modelB: string;
+    cosine: number;
+  }>;
+  divergences: Array<{
+    valueId: SchwartzValueId;
+    name: string;
+    scoresByModel: Record<string, number>;
+    minScore: number;
+    maxScore: number;
+    spread: number;
+  }>;
+}
+
+/**
+ * Calculates multi-model agreement across 2, 3, or more embedding models:
+ * Computes all pairwise 10D cosine similarities, mean inter-model agreement,
+ * and ranked per-value variance/spread across all evaluated models.
+ */
+export function computeMultiModelAgreement(
+  modelProfiles: Array<{ modelId: string; profile: SpeakerValueProfile }>
+): MultiModelComparisonResult {
+  if (modelProfiles.length < 2) {
+    return {
+      meanPairwiseCosine: 1,
+      meanSpread: 0,
+      pairwiseAgreements: [],
+      divergences: SCHWARTZ_CIRCUMPLEX_AXES.map((axis) => ({
+        valueId: axis.id,
+        name: axis.name,
+        scoresByModel: {},
+        minScore: 0,
+        maxScore: 0,
+        spread: 0,
+      })),
+    };
+  }
+
+  // Pairwise cosine similarity matrix
+  const pairwiseAgreements: Array<{
+    modelA: string;
+    modelB: string;
+    cosine: number;
+  }> = [];
+
+  let sumCosine = 0;
+  for (let i = 0; i < modelProfiles.length; i++) {
+    for (let j = i + 1; j < modelProfiles.length; j++) {
+      const cos = cosineSimilarity(
+        modelProfiles[i].profile.ipsativeVector,
+        modelProfiles[j].profile.ipsativeVector
+      );
+      pairwiseAgreements.push({
+        modelA: modelProfiles[i].modelId,
+        modelB: modelProfiles[j].modelId,
+        cosine: cos,
+      });
+      sumCosine += cos;
+    }
+  }
+
+  const meanPairwiseCosine =
+    pairwiseAgreements.length > 0 ? sumCosine / pairwiseAgreements.length : 1;
+
+  // Rank values by cross-model spread (max - min)
+  const divergences = SCHWARTZ_CIRCUMPLEX_AXES.map((axis) => {
+    const scoresByModel: Record<string, number> = {};
+    const vals: number[] = [];
+    for (const mp of modelProfiles) {
+      const s = mp.profile.scores[axis.id]?.ipsativeScore ?? 0;
+      scoresByModel[mp.modelId] = s;
+      vals.push(s);
+    }
+    const minScore = vals.length > 0 ? Math.min(...vals) : 0;
+    const maxScore = vals.length > 0 ? Math.max(...vals) : 0;
+    const spread = maxScore - minScore;
+
+    return {
+      valueId: axis.id,
+      name: axis.name,
+      scoresByModel,
+      minScore,
+      maxScore,
+      spread,
+    };
+  }).sort((a, b) => b.spread - a.spread);
+
+  const meanSpread =
+    divergences.reduce((acc, d) => acc + d.spread, 0) / divergences.length;
+
+  return {
+    meanPairwiseCosine,
+    meanSpread,
+    pairwiseAgreements,
+    divergences,
+  };
+}
+
 export function formatTimestamp(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
