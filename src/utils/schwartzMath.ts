@@ -4,6 +4,16 @@ import {
   SchwartzValueId,
 } from '../constants/schwartzAnchors';
 
+export interface TranscriptSentence {
+  id: string;
+  turnId: string;
+  sentenceIndex: number;
+  timestamp: number;
+  endTime: number;
+  speakerId: 'speaker_1' | 'speaker_2';
+  text: string;
+}
+
 export interface ValuePolarityDelta {
   valueId: SchwartzValueId;
   cosPos: number;
@@ -15,9 +25,13 @@ export interface ValuePolarityDelta {
 
 export interface EvaluatedUtterance {
   id: string;
+  turnId: string;
+  sentenceIndex: number;
   timestamp: number;
   endTime: number;
   speakerId: 'speaker_1' | 'speaker_2';
+  speakerName: string;
+  speakerRole: string;
   text: string;
   previousText?: string;
   contextExpandedInput: string;
@@ -47,8 +61,88 @@ export interface ValueAxisScore {
   ipsativeScore: number; // I_k = S_k - S_bar
   endorsementCount: number;
   rejectionCount: number;
-  topEndorsingQuotes: Array<{ utteranceId: string; timestamp: number; text: string; delta: number }>;
-  topOpposingQuotes: Array<{ utteranceId: string; timestamp: number; text: string; delta: number }>;
+  topEndorsingQuotes: Array<{
+    utteranceId: string;
+    sentenceIndex: number;
+    speakerName: string;
+    timestamp: number;
+    text: string;
+    delta: number;
+  }>;
+  topOpposingQuotes: Array<{
+    utteranceId: string;
+    sentenceIndex: number;
+    speakerName: string;
+    timestamp: number;
+    text: string;
+    delta: number;
+  }>;
+}
+
+/**
+ * Deterministically splits conversational turns into individual grammatical sentences,
+ * calculating accurate interpolated time boundaries and preserving sequential index.
+ */
+export function segmentTurnsIntoSentences(
+  turns: Array<{
+    id: string;
+    timestamp: number;
+    endTime: number;
+    speakerId: 'speaker_1' | 'speaker_2';
+    text: string;
+  }>
+): TranscriptSentence[] {
+  const result: TranscriptSentence[] = [];
+  let globalSentenceIndex = 1;
+
+  for (const turn of turns) {
+    // Split on sentence boundaries (. ? !) while avoiding titles like Dr. or e.g.
+    const rawParts = turn.text
+      .replace(/([.?!])\s+(?=[A-Z0-9"'])/g, '$1|')
+      .split('|')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    if (rawParts.length <= 1) {
+      result.push({
+        id: `${turn.id}-s1`,
+        turnId: turn.id,
+        sentenceIndex: globalSentenceIndex++,
+        speakerId: turn.speakerId,
+        timestamp: turn.timestamp,
+        endTime: turn.endTime,
+        text: turn.text.trim(),
+      });
+      continue;
+    }
+
+    const duration = Math.max(2, turn.endTime - turn.timestamp);
+    const totalChars = rawParts.reduce((acc, s) => acc + s.length, 0) || 1;
+    let runningStart = turn.timestamp;
+
+    rawParts.forEach((sentence, idx) => {
+      const share = sentence.length / totalChars;
+      const sentDuration = Math.max(1.5, Math.round(duration * share * 10) / 10);
+      const startT = Math.round(runningStart * 10) / 10;
+      const endT =
+        idx === rawParts.length - 1
+          ? turn.endTime
+          : Math.round(Math.min(turn.endTime, startT + sentDuration) * 10) / 10;
+      runningStart = endT;
+
+      result.push({
+        id: `${turn.id}-s${idx + 1}`,
+        turnId: turn.id,
+        sentenceIndex: globalSentenceIndex++,
+        speakerId: turn.speakerId,
+        timestamp: startT,
+        endTime: endT,
+        text: sentence,
+      });
+    });
+  }
+
+  return result;
 }
 
 export interface NetMotivationalCentroid {
@@ -196,11 +290,25 @@ export function computeSpeakerProfile(
   const rejectionCounts: Record<SchwartzValueId, number> = {} as Record<SchwartzValueId, number>;
   const endorsingQuotes: Record<
     SchwartzValueId,
-    Array<{ utteranceId: string; timestamp: number; text: string; delta: number }>
+    Array<{
+      utteranceId: string;
+      sentenceIndex: number;
+      speakerName: string;
+      timestamp: number;
+      text: string;
+      delta: number;
+    }>
   > = {} as any;
   const opposingQuotes: Record<
     SchwartzValueId,
-    Array<{ utteranceId: string; timestamp: number; text: string; delta: number }>
+    Array<{
+      utteranceId: string;
+      sentenceIndex: number;
+      speakerName: string;
+      timestamp: number;
+      text: string;
+      delta: number;
+    }>
   > = {} as any;
 
   for (const axis of SCHWARTZ_CIRCUMPLEX_AXES) {
@@ -221,6 +329,8 @@ export function computeSpeakerProfile(
         endorsementCounts[axis.id] += 1;
         endorsingQuotes[axis.id].push({
           utteranceId: u.id,
+          sentenceIndex: u.sentenceIndex,
+          speakerName: u.speakerName || speakerName,
           timestamp: u.timestamp,
           text: u.text,
           delta: d.thresholdedDelta,
@@ -230,6 +340,8 @@ export function computeSpeakerProfile(
         rejectionCounts[axis.id] += 1;
         opposingQuotes[axis.id].push({
           utteranceId: u.id,
+          sentenceIndex: u.sentenceIndex,
+          speakerName: u.speakerName || speakerName,
           timestamp: u.timestamp,
           text: u.text,
           delta: d.thresholdedDelta,

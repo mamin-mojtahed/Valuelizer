@@ -45,7 +45,9 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
 }) => {
   const [hoveredDot, setHoveredDot] = useState<{
     utteranceId: string;
+    sentenceIndex: number;
     speakerId: string;
+    speakerName: string;
     valueName: string;
     delta: number;
     timestamp: number;
@@ -366,7 +368,9 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                   onMouseEnter={() =>
                     setHoveredDot({
                       utteranceId: u.id,
+                      sentenceIndex: u.sentenceIndex,
                       speakerId: u.speakerId,
+                      speakerName: u.speakerName,
                       valueName: axis.name,
                       delta: d.thresholdedDelta,
                       timestamp: u.timestamp,
@@ -420,21 +424,26 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
       {/* Floating Tooltip for Scatter Dot Inspection */}
       {hoveredDot && (
         <div
-          className="pointer-events-none absolute z-20 max-w-xs bg-[#0B0E17]/95 border border-slate-700 rounded-md p-2.5 shadow-xl text-xs"
+          className="pointer-events-none absolute z-20 max-w-sm bg-[#0B0E17]/95 border border-slate-700 rounded-md p-3 shadow-2xl text-xs space-y-1.5 backdrop-blur-sm"
           style={{
             top: '12px',
             right: '12px',
           }}
         >
-          <div className="flex items-center justify-between gap-3 text-[11px] font-mono text-slate-400 mb-1">
-            <span className={hoveredDot.speakerId === 'speaker_1' ? 'text-cyan-400' : 'text-amber-400'}>
-              {hoveredDot.valueName} ({hoveredDot.delta >= 0 ? '+' : ''}
-              {hoveredDot.delta.toFixed(3)})
+          <div className="flex items-center justify-between gap-3 text-[11px] font-mono">
+            <span className={hoveredDot.speakerId === 'speaker_1' ? 'text-cyan-400 font-bold' : 'text-amber-400 font-bold'}>
+              #{hoveredDot.sentenceIndex} · {hoveredDot.speakerName}
             </span>
-            <span>@{formatTimestamp(hoveredDot.timestamp)}</span>
+            <span className="text-slate-400 tabular-nums">@{formatTimestamp(hoveredDot.timestamp)}</span>
           </div>
-          <p className="text-slate-200 line-clamp-2 leading-snug">"{hoveredDot.text}"</p>
-          <p className="text-[10px] font-mono text-cyan-400 mt-1">Click dot to seek video playhead</p>
+          <div className="text-[11px] font-mono font-medium">
+            <span className="text-slate-400">Value Delta: </span>
+            <span className={hoveredDot.delta >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+              {hoveredDot.valueName} ({hoveredDot.delta >= 0 ? '+' : ''}{hoveredDot.delta.toFixed(3)})
+            </span>
+          </div>
+          <p className="text-slate-200 line-clamp-2 leading-relaxed text-xs">"{hoveredDot.text}"</p>
+          <p className="text-[10px] font-mono text-cyan-400 pt-0.5">Click dot to seek video to exact sentence</p>
         </div>
       )}
     </div>

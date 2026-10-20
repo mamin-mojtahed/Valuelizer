@@ -8,6 +8,8 @@ import {
   computeDualAnchorDeltas,
   EvaluatedUtterance,
   extractDominantBadges,
+  segmentTurnsIntoSentences,
+  TranscriptSentence,
 } from '../utils/schwartzMath';
 
 export type EmbeddingModelId =
@@ -364,48 +366,65 @@ export async function evaluateTranscriptTurns(
   thresholdTau = 0.08,
   useContextExpansion = true,
   enableFlashLiteVerifier = false,
+  speakers?: {
+    speaker_1: { name: string; role: string };
+    speaker_2: { name: string; role: string };
+  },
   onProgress?: (completed: number, total: number, status: string) => void
 ): Promise<{
   evaluated: EvaluatedUtterance[];
   source: 'live-api' | 'local-wasm' | 'calibrated-engine';
 }> {
-  onProgress?.(0, turns.length, `Calibrating 20 PVQ dual-anchor vectors (${modelId})...`);
+  // 1. Segment all conversational turns into granular, exact sentence-level units
+  const sentences = segmentTurnsIntoSentences(turns);
+
+  onProgress?.(
+    0,
+    sentences.length,
+    `Calibrating 20 PVQ dual-anchor reference vectors (${modelId})...`
+  );
   const anchorVectors = await getDualAnchorVectors(modelId, (msg) =>
-    onProgress?.(0, turns.length, msg)
+    onProgress?.(0, sentences.length, msg)
   );
 
-  const expandedInputs = turns.map((turn, idx) => {
-    const prevTurnText = idx > 0 ? turns[idx - 1].text : undefined;
+  // 2. Build Context Window Expansion per sentence: Previous sentence + Current sentence
+  const expandedInputs = sentences.map((sent, idx) => {
+    const prevSentenceText = idx > 0 ? sentences[idx - 1].text : undefined;
     return useContextExpansion
-      ? buildContextExpandedInput(turn.text, prevTurnText)
-      : turn.text;
+      ? buildContextExpandedInput(sent.text, prevSentenceText)
+      : sent.text;
   });
 
   onProgress?.(
-    Math.max(1, Math.floor(turns.length * 0.25)),
-    turns.length,
-    `Embedding ${turns.length} speaker turns via ${modelId}...`
+    Math.max(1, Math.floor(sentences.length * 0.2)),
+    sentences.length,
+    `Embedding ${sentences.length} discrete sentences via ${modelId}...`
   );
 
   const { vectors, source } = await embedTextsWithModel(
     expandedInputs,
     modelId,
-    (msg) => onProgress?.(Math.floor(turns.length * 0.4), turns.length, msg)
+    (msg) => onProgress?.(Math.floor(sentences.length * 0.4), sentences.length, msg)
   );
 
-  const evaluated: EvaluatedUtterance[] = turns.map((turn, idx) => {
-    const prevTurnText = idx > 0 ? turns[idx - 1].text : undefined;
+  const evaluated: EvaluatedUtterance[] = sentences.map((sent, idx) => {
+    const prevSentenceText = idx > 0 ? sentences[idx - 1].text : undefined;
     const contextExpandedInput = expandedInputs[idx];
     const deltas = computeDualAnchorDeltas(vectors[idx], anchorVectors, thresholdTau);
     const dominantBadges = extractDominantBadges(deltas, 3);
+    const speakerMeta = speakers ? speakers[sent.speakerId] : undefined;
 
     return {
-      id: turn.id,
-      timestamp: turn.timestamp,
-      endTime: turn.endTime,
-      speakerId: turn.speakerId,
-      text: turn.text,
-      previousText: prevTurnText,
+      id: sent.id,
+      turnId: sent.turnId,
+      sentenceIndex: sent.sentenceIndex,
+      timestamp: sent.timestamp,
+      endTime: sent.endTime,
+      speakerId: sent.speakerId,
+      speakerName: speakerMeta?.name || (sent.speakerId === 'speaker_1' ? 'Speaker 1' : 'Speaker 2'),
+      speakerRole: speakerMeta?.role || 'Interlocutor',
+      text: sent.text,
+      previousText: prevSentenceText,
       contextExpandedInput,
       deltas,
       dominantBadges,
@@ -469,7 +488,7 @@ export async function evaluateTranscriptTurns(
 export function extractYouTubeVideoId(input: string): string | null {
   const trimmed = input.trim();
   const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
+    /(?:youtube\.com\/(?:watch\?.*v=|embed\/|shorts\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
     /^([a-zA-Z0-9_-]{11})$/,
   ];
   for (const regex of patterns) {

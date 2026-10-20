@@ -143,6 +143,7 @@ export default function App() {
           tau,
           contextExp,
           verifier,
+          debate.speakers,
           (completed, total, status) => {
             setBatchProgress({ completed, total, status });
           }
@@ -163,6 +164,7 @@ export default function App() {
             tau,
             contextExp,
             false,
+            debate.speakers,
             (completed, total, status) => {
               setBatchProgress({ completed, total, status: `[Compare] ${status}` });
             }
@@ -175,6 +177,18 @@ export default function App() {
     },
     []
   );
+
+  // Active sentence evaluated at or near playhead position
+  const activeUtterance = useMemo(() => {
+    if (primaryUtterances.length === 0) return null;
+    const current = primaryUtterances.find(
+      (u) => currentTime >= u.timestamp && currentTime < u.endTime
+    );
+    if (current) return current;
+    const past = primaryUtterances.filter((u) => u.timestamp <= currentTime);
+    if (past.length > 0) return past[past.length - 1];
+    return primaryUtterances[0];
+  }, [primaryUtterances, currentTime]);
 
   useEffect(() => {
     runEvaluationPipeline(
@@ -401,20 +415,33 @@ export default function App() {
     if (!query) return;
     setIngestError(null);
 
-    // 1. Check if input matches any of the 3 pre-indexed debates by videoId, URL, or keywords
+    // 1. Check if input matches any of the pre-indexed debates by videoId, URL, or keywords
     const extractedVideoId = extractYouTubeVideoId(query);
-    const lowerQuery = query.toLowerCase();
+    const lowerQuery = query.toLowerCase().trim();
 
-    const matchedPreset = PRE_INDEXED_DEBATES.find(
-      (d) =>
-        (extractedVideoId && d.videoId === extractedVideoId) ||
-        d.title.toLowerCase().includes(lowerQuery) ||
-        d.keywords.some((k) => lowerQuery.includes(k))
-    );
+    let matchedPreset: PreIndexedDebate | undefined;
+    if (extractedVideoId) {
+      // If a YouTube video URL or ID was submitted, match strictly by video ID
+      matchedPreset = PRE_INDEXED_DEBATES.find((d) => d.videoId === extractedVideoId);
+    } else {
+      matchedPreset = PRE_INDEXED_DEBATES.find(
+        (d) =>
+          d.title.toLowerCase().includes(lowerQuery) ||
+          d.keywords.some(
+            (k) =>
+              k.toLowerCase() === lowerQuery ||
+              (lowerQuery.includes(k.toLowerCase()) && k.length > 5)
+          )
+      );
+    }
 
     if (matchedPreset) {
       setActiveDebate(matchedPreset);
-      setCurrentTime(matchedPreset.durationSeconds);
+      if (executionMode === 'batch') {
+        setCurrentTime(matchedPreset.durationSeconds);
+      } else {
+        setCurrentTime(75);
+      }
       setIsPlaying(false);
       return;
     }
@@ -475,9 +502,16 @@ export default function App() {
       setCurrentTime(customDebate.durationSeconds);
       setIsPlaying(false);
     } catch (err: any) {
-      setIngestError(
-        err?.message || 'Unable to synthesize custom transcript; loaded nearest benchmark debate.'
-      );
+      let msg = err?.message || 'Unable to load custom stream; loaded nearest benchmark debate.';
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed?.error?.message) {
+          msg = parsed.error.message;
+        }
+      } catch (_e) {
+        // Not JSON
+      }
+      setIngestError(msg);
     } finally {
       setIsIngestingVideo(false);
     }
@@ -706,9 +740,9 @@ export default function App() {
             {PRE_INDEXED_DEBATES.map((debate, index) => {
               const isSelected = activeDebate.id === debate.id;
               const shortNames = [
-                '01. AI Safety vs. Acceleration',
-                '02. UBI vs. Meritocracy',
-                '03. Altman & Fridman AGI',
+                '01. StarTalk: Free Will (Tyson & Liu)',
+                '02. Wealth, Poverty & Politics (Sowell)',
+                '03. Altman & Fridman AGI Scaling',
               ];
               return (
                 <button
@@ -955,7 +989,7 @@ export default function App() {
                           effectiveCutoffTime === undefined || u.timestamp <= effectiveCutoffTime
                       ).length
                     }
-                    /{activeDebate.turns.length} turns active
+                    /{primaryUtterances.length || activeDebate.turns.length} sentences active
                   </div>
                 </div>
 
@@ -988,7 +1022,7 @@ export default function App() {
               <YouTubePlayer
                 videoId={activeDebate.videoId}
                 durationSeconds={activeDebate.durationSeconds}
-                turns={activeDebate.turns}
+                turns={primaryUtterances.length > 0 ? primaryUtterances : activeDebate.turns}
                 currentTime={currentTime}
                 isPlaying={isPlaying}
                 onTimeUpdate={setCurrentTime}
@@ -996,11 +1030,92 @@ export default function App() {
                 seekRequest={seekRequest}
               />
 
-              {/* Diarized Transcript Feed */}
+              {/* Active Sentence Processing HUD (Shows exact sentence from transcript currently evaluated) */}
+              {activeUtterance && (
+                <div className="bg-[#111827] border border-cyan-500/50 rounded-md p-4 space-y-3 shadow-xl ring-1 ring-cyan-500/20">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                      <span className="text-cyan-400 font-semibold uppercase tracking-wider">
+                        Active Sentence #{activeUtterance.sentenceIndex} of {primaryUtterances.length}
+                      </span>
+                    </div>
+                    <span className="text-slate-400 tabular-nums">
+                      @{formatTimestamp(activeUtterance.timestamp)} – {formatTimestamp(activeUtterance.endTime)}
+                    </span>
+                  </div>
+
+                  {/* Identified Speaker */}
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className={`w-6 h-6 rounded flex items-center justify-center text-xs font-mono font-bold ${
+                        activeUtterance.speakerId === 'speaker_1'
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      }`}
+                    >
+                      {activeUtterance.speakerId === 'speaker_1' ? 'S1' : 'S2'}
+                    </span>
+                    <div>
+                      <span
+                        className={`text-sm font-bold ${
+                          activeUtterance.speakerId === 'speaker_1'
+                            ? 'text-cyan-300'
+                            : 'text-amber-300'
+                        }`}
+                      >
+                        {activeUtterance.speakerName}
+                      </span>
+                      <span className="text-xs text-slate-400 ml-2 font-mono">
+                        ({activeUtterance.speakerRole})
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Exact Sentence Processed From Transcript */}
+                  <div className="p-3 bg-[#07090E] border border-slate-800 rounded">
+                    <div className="text-[10px] font-mono text-cyan-400 mb-1 uppercase tracking-wide">
+                      Exact Sentence From Transcript Processed:
+                    </div>
+                    <p className="text-sm font-medium text-slate-100 leading-relaxed">
+                      "{activeUtterance.text}"
+                    </p>
+                  </div>
+
+                  {/* Context Window Expansion & Polarity Differential */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
+                    <div className="p-2 bg-[#07090E] border border-slate-800/80 rounded">
+                      <span className="text-slate-400 block mb-0.5">Context Window Expansion:</span>
+                      <span className="text-slate-300 line-clamp-2">
+                        {activeUtterance.contextExpandedInput}
+                      </span>
+                    </div>
+                    <div className="p-2 bg-[#07090E] border border-slate-800/80 rounded">
+                      <span className="text-slate-400 block mb-0.5">Detected Schwartz Polarity:</span>
+                      {activeUtterance.dominantBadges.length === 0 ? (
+                        <span className="text-slate-500 italic">Within neutral boundary (|Δ| &lt; {thresholdTau.toFixed(2)})</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                          {activeUtterance.dominantBadges.map((b) => (
+                            <span
+                              key={b.valueId}
+                              className={b.polarity === '+' ? 'text-emerald-400' : 'text-rose-400'}
+                            >
+                              {b.polarity}{b.name} ({b.delta >= 0 ? '+' : ''}{b.delta.toFixed(3)})
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Synchronized Diarized Sentence-by-Sentence Feed */}
               <div className="bg-[#111827] border border-slate-800 rounded-md flex flex-col">
                 <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
                   <div className="text-xs font-semibold text-slate-200">
-                    Synchronized Diarized Transcript
+                    Diarized Sentence Stream ({primaryUtterances.length} sentences)
                   </div>
                   <div className="flex items-center gap-3 text-xs font-mono">
                     <span className="text-cyan-400">
@@ -1017,8 +1132,7 @@ export default function App() {
                   className="max-h-[460px] overflow-y-auto divide-y divide-slate-800/80"
                 >
                   {primaryUtterances.map((utt) => {
-                    const speaker = activeDebate.speakers[utt.speakerId];
-                    const isCurrentTurn =
+                    const isCurrentSentence =
                       currentTime >= utt.timestamp && currentTime < utt.endTime;
                     const isFutureInSync =
                       executionMode === 'sync' && utt.timestamp > currentTime;
@@ -1027,18 +1141,21 @@ export default function App() {
                       <div
                         key={utt.id}
                         onClick={() => handleSeekToTimestamp(utt.timestamp, utt.id)}
-                        className={`p-3.5 transition-colors cursor-pointer ${
-                          isCurrentTurn
-                            ? 'bg-slate-800/75 ring-1 ring-inset ring-cyan-500/40'
+                        className={`p-3 transition-colors cursor-pointer ${
+                          isCurrentSentence
+                            ? 'bg-slate-800/85 ring-1 ring-inset ring-cyan-500/50'
                             : isFutureInSync
-                            ? 'opacity-45 hover:opacity-80 bg-[#0B0E17]/40'
+                            ? 'opacity-40 hover:opacity-80 bg-[#0B0E17]/40'
                             : 'hover:bg-slate-900/60'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2 mb-1.5">
                           <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-slate-500 tabular-nums font-semibold">
+                              #{utt.sentenceIndex}
+                            </span>
                             <span
-                              className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-mono font-bold ${
+                              className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-mono font-bold ${
                                 utt.speakerId === 'speaker_1'
                                   ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                                   : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
@@ -1051,7 +1168,7 @@ export default function App() {
                                 utt.speakerId === 'speaker_1' ? 'text-cyan-300' : 'text-amber-300'
                               }`}
                             >
-                              {speaker.name}
+                              {utt.speakerName}
                             </span>
                             <span className="text-xs text-slate-500">·</span>
                             <span className="text-[11px] font-mono tabular-nums text-slate-400">
@@ -1059,16 +1176,18 @@ export default function App() {
                             </span>
                           </div>
 
-                          {isCurrentTurn && (
+                          {isCurrentSentence && (
                             <span className="text-[10px] font-mono text-cyan-400">
-                              ● PLAYHEAD ACTIVE
+                              ● ACTIVE SENTENCE
                             </span>
                           )}
                         </div>
 
-                        <p className="text-xs text-slate-200 leading-relaxed">{utt.text}</p>
+                        <p className="text-xs text-slate-200 leading-relaxed font-normal">
+                          "{utt.text}"
+                        </p>
 
-                        {/* Detected Schwartz Value Polarity Readout */}
+                        {/* Detected Schwartz Value Polarity Badges */}
                         {utt.dominantBadges.length > 0 && (
                           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono">
                             {utt.dominantBadges.map((b) => (
@@ -1085,7 +1204,7 @@ export default function App() {
                               >
                                 {b.polarity}
                                 {b.name} ({b.delta >= 0 ? '+' : ''}
-                                {b.delta.toFixed(2)})
+                                {b.delta.toFixed(3)})
                               </button>
                             ))}
                           </div>
@@ -1569,10 +1688,10 @@ export default function App() {
                                 className="p-2 bg-[#111827] hover:bg-slate-800/80 border border-slate-800 rounded text-xs cursor-pointer transition-colors"
                               >
                                 <div className="flex justify-between font-mono text-[10px] text-emerald-400 mb-0.5 tabular-nums">
-                                  <span>@{formatTimestamp(q.timestamp)}</span>
+                                  <span>#{q.sentenceIndex} · {q.speakerName} (@{formatTimestamp(q.timestamp)})</span>
                                   <span>Δ = +{q.delta.toFixed(3)}</span>
                                 </div>
-                                <p className="text-slate-300 line-clamp-2">"{q.text}"</p>
+                                <p className="text-slate-200 line-clamp-2">"{q.text}"</p>
                               </div>
                             ))
                           )}
@@ -1591,10 +1710,10 @@ export default function App() {
                                 className="p-2 bg-[#111827] hover:bg-slate-800/80 border border-slate-800 rounded text-xs cursor-pointer transition-colors"
                               >
                                 <div className="flex justify-between font-mono text-[10px] text-rose-400 mb-0.5 tabular-nums">
-                                  <span>@{formatTimestamp(q.timestamp)}</span>
+                                  <span>#{q.sentenceIndex} · {q.speakerName} (@{formatTimestamp(q.timestamp)})</span>
                                   <span>Δ = {q.delta.toFixed(3)}</span>
                                 </div>
-                                <p className="text-slate-300 line-clamp-2">"{q.text}"</p>
+                                <p className="text-slate-200 line-clamp-2">"{q.text}"</p>
                               </div>
                             ))}
                           </div>
