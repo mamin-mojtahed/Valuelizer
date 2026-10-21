@@ -44,7 +44,7 @@
       {
         "id": "fw-t2",
         "timestamp": 4,
-        "endTime": 8,
+        "endTime": 9,
         "speakerId": "speaker_2",
         "text": "Oh. Oh, one of my favorite things to discuss."
       },
@@ -57,7 +57,7 @@
       },
       {
         "id": "fw-t4",
-        "timestamp": 8,
+        "timestamp": 20,
         "endTime": 33,
         "speakerId": "speaker_2",
         "text": "Here's my take. It is true that at some level of resolution that we can observe, causality is absolute true. Given these initial conditions, this is what will happen afterwards."
@@ -79,27 +79,27 @@
       {
         "id": "fw-t7",
         "timestamp": 42,
-        "endTime": 43,
+        "endTime": 44,
         "speakerId": "speaker_1",
         "text": "Everything has some antecedent."
       },
       {
         "id": "fw-t8",
-        "timestamp": 43,
-        "endTime": 46,
+        "timestamp": 44,
+        "endTime": 47,
         "speakerId": "speaker_2",
         "text": "whether you know it or not, something is causing it to happen."
       },
       {
         "id": "fw-t9",
-        "timestamp": 46,
-        "endTime": 50,
+        "timestamp": 47,
+        "endTime": 51,
         "speakerId": "speaker_1",
         "text": "Something precipitated the thing that caused the thing that made that."
       },
       {
         "id": "fw-t10",
-        "timestamp": 50,
+        "timestamp": 51,
         "endTime": 60,
         "speakerId": "speaker_2",
         "text": "It's always going to happen. But there is also stochastic uncertainty in the universe. It's built in."
@@ -114,287 +114,280 @@
       {
         "id": "fw-t12",
         "timestamp": 61,
-        "endTime": 62,
+        "endTime": 63,
         "speakerId": "speaker_2",
-        "text": "There's randomness."
-      },
-      {
-        "id": "fw-t13",
-        "timestamp": 61,
-        "endTime": 62,
-        "speakerId": "speaker_1",
-        "text": "Chaos."
+        "text": "There's randomness. There's unpredictability."
       },
       {
         "id": "fw-t14",
-        "timestamp": 62,
-        "endTime": 122,
+        "timestamp": 63,
+        "endTime": 82,
         "speakerId": "speaker_2",
-        "text": "There's unpredictability. Yeah, and so you have to ask, I think if you're a physicist, what level of chaos actually affects you to the extent that you could actually make an instantaneous decision based on other stuff. Let's not necessarily in your past experiences or what you have just seen in your current environment."
+        "text": "Yeah, and so you have to ask, I think if you're a physicist, what level of chaos actually affects you to the extent that you could actually make an instantaneous decision based on other stuff. Let's not necessarily in your past experiences or what you have just seen in your current environment."
       },
       {
         "id": "fw-t15",
-        "timestamp": 122,
-        "endTime": 143,
+        "timestamp": 82,
+        "endTime": 105,
         "speakerId": "speaker_1",
         "text": "But wouldn't all those past experiences and your current environment, despite the fact that if you're introducing an element of chaos so that you've never experienced this ever before, your experiences that you have had would then inform your decision about the thing that you've never experienced."
       },
       {
         "id": "fw-t16",
-        "timestamp": 143,
-        "endTime": 146,
+        "timestamp": 105,
+        "endTime": 110,
         "speakerId": "speaker_2",
         "text": "Your inform is the word."
       },
       {
         "id": "fw-t17",
-        "timestamp": 146,
-        "endTime": 150,
+        "timestamp": 110,
+        "endTime": 112,
         "speakerId": "speaker_1",
         "text": "Oh. Is it inform or dictate? Right, right, right, or"
       },
       {
         "id": "fw-t18",
-        "timestamp": 150,
-        "endTime": 151,
+        "timestamp": 112,
+        "endTime": 113,
         "speakerId": "speaker_2",
         "text": "require, right, that's the thing."
       },
       {
         "id": "fw-t19",
-        "timestamp": 151,
-        "endTime": 152,
+        "timestamp": 113,
+        "endTime": 114,
         "speakerId": "speaker_1",
         "text": "Oh."
       },
       {
         "id": "fw-t20",
-        "timestamp": 152,
-        "endTime": 153,
+        "timestamp": 114,
+        "endTime": 115,
         "speakerId": "speaker_2",
         "text": "Yeah."
       },
       {
         "id": "fw-t21",
-        "timestamp": 153,
-        "endTime": 155,
+        "timestamp": 115,
+        "endTime": 116,
         "speakerId": "speaker_1",
         "text": "Yeah."
       },
       {
         "id": "fw-t22",
-        "timestamp": 155,
-        "endTime": 159,
+        "timestamp": 113,
+        "endTime": 118,
         "speakerId": "speaker_2",
         "text": "Let's say you're in a room with a whole bunch of audience members. You tell a joke."
       },
       {
         "id": "fw-t23",
-        "timestamp": 159,
-        "endTime": 160,
+        "timestamp": 118,
+        "endTime": 120,
         "speakerId": "speaker_1",
         "text": "Right."
       },
       {
         "id": "fw-t24",
-        "timestamp": 160,
-        "endTime": 202,
+        "timestamp": 120,
+        "endTime": 122,
         "speakerId": "speaker_2",
         "text": "It falls flat. In that moment, you have many things you could do to turn it into a laugh point."
       },
       {
         "id": "fw-t25",
-        "timestamp": 202,
-        "endTime": 203,
+        "timestamp": 122,
+        "endTime": 124,
         "speakerId": "speaker_1",
         "text": "True."
       },
       {
         "id": "fw-t26",
-        "timestamp": 203,
-        "endTime": 206,
+        "timestamp": 124,
+        "endTime": 129,
         "speakerId": "speaker_2",
         "text": "Right? You you hear silence and you be like, oh that was good and then one laughs, or you know, so you make some sort"
       },
       {
         "id": "fw-t27",
-        "timestamp": 206,
-        "endTime": 209,
+        "timestamp": 129,
+        "endTime": 132,
         "speakerId": "speaker_1",
         "text": "Is this mic on? You know, that's the old one."
       },
       {
         "id": "fw-t28",
-        "timestamp": 209,
-        "endTime": 224,
+        "timestamp": 132,
+        "endTime": 145,
         "speakerId": "speaker_2",
         "text": "You know, what do you do? Do you have the freedom to choose one of several choices that you had designed from your past, that you prepared to deal with that eventuality? Or is the choice made for you already?"
       },
       {
         "id": "fw-t29",
-        "timestamp": 224,
-        "endTime": 234,
+        "timestamp": 145,
+        "endTime": 150,
         "speakerId": "speaker_1",
         "text": "But if he was less experienced, he might not dig out of that hole as effectively or efficiently."
       },
       {
         "id": "fw-t30",
-        "timestamp": 234,
-        "endTime": 235,
+        "timestamp": 150,
+        "endTime": 152,
         "speakerId": "speaker_2",
         "text": "Yes."
       },
       {
         "id": "fw-t31",
-        "timestamp": 235,
-        "endTime": 248,
+        "timestamp": 152,
+        "endTime": 166,
         "speakerId": "speaker_1",
         "text": "Exactly. But if you've been in a hundred cases where you had a joke bomb, you have data on how to pull out of it. So statistically you have a chance of getting people to smile. And it happens instantaneously. You don't even realize that it's happened. It's in the moment. Right. Did you have free will to not? See, that's"
       },
       {
         "id": "fw-t32",
-        "timestamp": 247,
-        "endTime": 248,
+        "timestamp": 166,
+        "endTime": 167,
         "speakerId": "speaker_2",
         "text": "Maybe."
       },
       {
         "id": "fw-t33",
-        "timestamp": 248,
-        "endTime": 320,
+        "timestamp": 171,
+        "endTime": 198,
         "speakerId": "speaker_1",
         "text": "Right. So, now, that would be interesting because here you are in a place where your instinct, your training Your 10,000 hours. And your desire. 10,000 hours. Whatever it is. Whatever it is. Will as a reflex, cause you to say, this this and this and then people go, wow, that was great. Look how he turned it around. So Charles, can I say in that comment, that he preloaded his neurosynapsis so that in that moment, they all tripped. Right."
       },
       {
         "id": "fw-t34",
-        "timestamp": 320,
-        "endTime": 321,
+        "timestamp": 199,
+        "endTime": 200,
         "speakerId": "speaker_2",
         "text": "Mhm."
       },
       {
         "id": "fw-t35",
-        "timestamp": 320,
-        "endTime": 325,
+        "timestamp": 200,
+        "endTime": 203,
         "speakerId": "speaker_1",
         "text": "They tripped, meaning triggered to go to the solution to that problem."
       },
       {
         "id": "fw-t36",
-        "timestamp": 325,
-        "endTime": 326,
+        "timestamp": 203,
+        "endTime": 206,
         "speakerId": "speaker_2",
         "text": "Right, the same is true for"
       },
       {
         "id": "fw-t37",
-        "timestamp": 326,
-        "endTime": 336,
+        "timestamp": 206,
+        "endTime": 218,
         "speakerId": "speaker_1",
         "text": "But then I wouldn't have free will at that point. It would just be a response. What I would have is a response to a situation. Not necessarily I wasn't really choosing that. It chose it for you. It chose it for you."
       },
       {
         "id": "fw-t38",
-        "timestamp": 336,
-        "endTime": 341,
+        "timestamp": 218,
+        "endTime": 223,
         "speakerId": "speaker_2",
         "text": "You have five choices and then your system choose, chooses one of the five."
       },
       {
         "id": "fw-t39",
-        "timestamp": 341,
-        "endTime": 342,
+        "timestamp": 223,
+        "endTime": 225,
         "speakerId": "speaker_1",
         "text": "In that moment."
       },
       {
         "id": "fw-t40",
-        "timestamp": 342,
-        "endTime": 395,
+        "timestamp": 225,
+        "endTime": 263,
         "speakerId": "speaker_2",
         "text": "Or in that moment, right? And so in that moment, you are not exercising free will. Did you set it up though, with free will in the past, so that you could react this way deterministically, but you actually were in control of the circumstances. Right? Here's another physical example of that: A football player is trying to sack a quarterback. The quarterback jukes left, the person trying to sack the QB doesn't have enough time to think about whether to move left or right or up or down. It has to react based on years of training and practice and experience. So in that moment, that action is not free. But in the setting up of that moment, if it was free enough, does that constitute free will? From a physics perspective, it might not. Then again, from a psychological point of view, or from a biological point of view, it might."
       },
       {
         "id": "fw-t41",
-        "timestamp": 395,
-        "endTime": 414,
+        "timestamp": 275,
+        "endTime": 294,
         "speakerId": "speaker_1",
         "text": "Well, what good are you if you're not landing on one side or the other? Yeah. I don't need you to say Hey. it could be this, it could be that. And I'm right both ways. Whichever the actual answer is, I was right. Yeah. Well, he's saying, I don't really have the free will to make that determination. I'm going to be right or or wrong."
       },
       {
         "id": "fw-t42",
-        "timestamp": 414,
-        "endTime": 424,
+        "timestamp": 296,
+        "endTime": 305,
         "speakerId": "speaker_2",
         "text": "Let's let's just ask an opinion. In my opinion, I would like to have free will exist in this universe. Even though philosophically it can be argued that it does not exist."
       },
       {
         "id": "fw-t43",
-        "timestamp": 424,
-        "endTime": 431,
+        "timestamp": 305,
+        "endTime": 312,
         "speakerId": "speaker_1",
         "text": "Are you happy with a world where you perceive free will even if it isn't? Oh."
       },
       {
         "id": "fw-t44",
-        "timestamp": 431,
-        "endTime": 445,
+        "timestamp": 312,
+        "endTime": 327,
         "speakerId": "speaker_2",
         "text": "Maybe. This has to do with the movie Arrival, right? Starting Amy Adams. Where if you know how your future's going to turn out, would you like to live your life anyway? Right? And the answer is, yes. I would. But I still would like to think that the future is not yet predetermined."
       },
       {
         "id": "fw-t45",
-        "timestamp": 445,
-        "endTime": 475,
+        "timestamp": 327,
+        "endTime": 348,
         "speakerId": "speaker_1",
         "text": "No, no, but I, know what? It's different. I'm not saying it's predetermined and you know it. I'm saying, would you still be happy with life if someone, if some alien said, look dude, your life is predetermined. There's nothing you can do about it, keep on believing you have free will. And then they go back to their planet. You're a puppet on a string. Puppet on a string from from a free will. You're a free will puppet on a string."
       },
       {
         "id": "fw-t46",
-        "timestamp": 475,
-        "endTime": 499,
+        "timestamp": 350,
+        "endTime": 370,
         "speakerId": "speaker_2",
         "text": "What I would say in that case is that I would hope that the knowledge that I have that uh puppet on the string circumstance, allows me to circumvent it. I can find a way if you know, it's fate, right? You've seen so many uh Greek mythology stories where you tried to avoid the fate of uh whatever the gods have destined for you."
       },
       {
         "id": "fw-t47",
-        "timestamp": 499,
-        "endTime": 503,
+        "timestamp": 370,
+        "endTime": 374,
         "speakerId": "speaker_1",
         "text": "The act of avoiding it. That's why it makes it happen. Right. Like Oedipus, for example."
       },
       {
         "id": "fw-t48",
-        "timestamp": 503,
-        "endTime": 508,
+        "timestamp": 374,
+        "endTime": 381,
         "speakerId": "speaker_2",
         "text": "would be the most uh egregious example."
       },
       {
         "id": "fw-t49",
-        "timestamp": 508,
-        "endTime": 510,
+        "timestamp": 381,
+        "endTime": 383,
         "speakerId": "speaker_1",
         "text": "Yes. So, so the bottom line is, yes,"
       },
       {
         "id": "fw-t50",
-        "timestamp": 510,
-        "endTime": 529,
+        "timestamp": 383,
+        "endTime": 397,
         "speakerId": "speaker_2",
         "text": "I would still be satisfied with trying to do something different. Because even the illusion of trying to do something different is in itself a form of free will. Physics wise though, that's the challenge, right?"
       },
       {
         "id": "fw-t51",
-        "timestamp": 529,
-        "endTime": 535,
+        "timestamp": 397,
+        "endTime": 406,
         "speakerId": "speaker_2",
         "text": "So, Neil, if you had to right now decide that free will does exist or doesn't exist, what would you prefer?"
       },
       {
         "id": "fw-t52",
-        "timestamp": 535,
-        "endTime": 560,
+        "timestamp": 406,
+        "endTime": 420,
         "speakerId": "speaker_1",
         "text": "My thinking over recent years is leaning towards the absence of free will for practically everything we think and do in our lives."
       }
