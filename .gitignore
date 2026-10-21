@@ -9,3 +9,4 @@ coverage/
 .antigravity/
 .vscode/
 scratch/
+.cache/

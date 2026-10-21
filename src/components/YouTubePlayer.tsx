@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import { Pause, Play, RotateCcw, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { TranscriptTurn } from '../constants/schwartzAnchors';
 import { formatTimestamp } from '../utils/schwartzMath';
 
@@ -190,6 +190,56 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     }
   };
 
+  const handlePrevSentence = () => {
+    if (!turns || turns.length === 0) return;
+    const currIdx = turns.findIndex((t) => currentTime >= t.timestamp && currentTime <= t.endTime);
+    let targetIdx = -1;
+    if (currIdx > 0) {
+      if (currentTime - turns[currIdx].timestamp > 1.2) {
+        targetIdx = currIdx;
+      } else {
+        targetIdx = currIdx - 1;
+      }
+    } else if (currIdx === 0) {
+      targetIdx = 0;
+    } else {
+      const past = turns.map((t, idx) => ({ t, idx })).filter(({ t }) => t.timestamp < currentTime);
+      targetIdx = past.length > 0 ? past[past.length - 1].idx : 0;
+    }
+    const targetTime = turns[targetIdx].timestamp;
+    onTimeUpdate(targetTime);
+    if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+      try {
+        playerRef.current.seekTo(targetTime, true);
+      } catch (_e) {
+        // Ignore
+      }
+    }
+  };
+
+  const handleNextSentence = () => {
+    if (!turns || turns.length === 0) return;
+    const currIdx = turns.findIndex((t) => currentTime >= t.timestamp && currentTime < t.endTime);
+    let targetIdx = -1;
+    if (currIdx >= 0 && currIdx < turns.length - 1) {
+      targetIdx = currIdx + 1;
+    } else if (currIdx === -1) {
+      const future = turns.map((t, idx) => ({ t, idx })).filter(({ t }) => t.timestamp > currentTime);
+      targetIdx = future.length > 0 ? future[0].idx : turns.length - 1;
+    } else {
+      targetIdx = turns.length - 1;
+    }
+    const targetTime = turns[targetIdx].timestamp;
+    onTimeUpdate(targetTime);
+    if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+      try {
+        playerRef.current.seekTo(targetTime, true);
+      } catch (_e) {
+        // Ignore
+      }
+    }
+  };
+
   return (
     <div className="bg-[#0B0E17] border border-slate-800 rounded-md overflow-hidden">
       {/* 16:9 YouTube IFrame Viewport */}
@@ -254,7 +304,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
           />
         </div>
 
-        {/* Compact Transport Bar (Without Redundant Slider) */}
+        {/* Compact Transport Bar with Prev/Next Sentence buttons on left of timestamps */}
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-1.5">
             <button
@@ -283,11 +333,37 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
             </button>
           </div>
 
-          {/* Time Telemetry Readout */}
-          <div className="flex items-center gap-2 font-mono text-xs tabular-nums text-slate-300 shrink-0">
-            <span className="text-cyan-400 font-semibold">{formatTimestamp(currentTime)}</span>
-            <span className="text-slate-600">/</span>
-            <span className="text-slate-400">{formatTimestamp(durationSeconds)}</span>
+          {/* Prev/Next Sentence Buttons on the Left Side of Time Telemetry Readout */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handlePrevSentence}
+                disabled={turns.length === 0}
+                className="flex items-center gap-1 px-2 py-1 text-slate-300 hover:text-cyan-300 bg-[#07090E] hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded text-[11px] font-mono transition-colors cursor-pointer disabled:opacity-40"
+                title="Jump to previous sentence"
+              >
+                <SkipBack className="w-3 h-3 text-cyan-400" />
+                <span>Prev</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleNextSentence}
+                disabled={turns.length === 0}
+                className="flex items-center gap-1 px-2 py-1 text-slate-300 hover:text-cyan-300 bg-[#07090E] hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded text-[11px] font-mono transition-colors cursor-pointer disabled:opacity-40"
+                title="Jump to next sentence"
+              >
+                <span>Next</span>
+                <SkipForward className="w-3 h-3 text-cyan-400" />
+              </button>
+            </div>
+
+            {/* Time Telemetry Readout */}
+            <div className="flex items-center gap-1.5 font-mono text-xs tabular-nums text-slate-300 pl-1 border-l border-slate-800/80">
+              <span className="text-cyan-400 font-semibold">{formatTimestamp(currentTime)}</span>
+              <span className="text-slate-600">/</span>
+              <span className="text-slate-400">{formatTimestamp(durationSeconds)}</span>
+            </div>
           </div>
         </div>
       </div>

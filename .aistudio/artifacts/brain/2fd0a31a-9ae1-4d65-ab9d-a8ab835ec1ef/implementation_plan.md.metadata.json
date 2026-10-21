@@ -1,0 +1,6 @@
+{
+  "summary":  "Updated implementation plan renaming the graph top bar toggle to 'Preview Sum' for displaying the faint dashed final sum radar map in the background with rate-limit considerate progressive batching.",
+  "updatedAt":  "2026-10-21T16:37:52.563098141Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   BookmarkPlus,
+  Bug,
   Check,
   ChevronDown,
   ChevronUp,
+  CircleDotDashed,
   Columns,
   Compass,
   Cpu,
@@ -12,6 +13,7 @@ import {
   History,
   Layers,
   Play,
+  RotateCcw,
   Search,
   Sliders,
   Trash2,
@@ -24,6 +26,7 @@ import {
   SchwartzValueId,
 } from './constants/schwartzAnchors';
 import {
+  clearClientEmbeddingCache,
   EMBEDDING_MODELS,
   EmbeddingModelId,
   evaluateTranscriptTurns,
@@ -114,13 +117,46 @@ export default function App() {
   const [useContextExpansion, setUseContextExpansion] = useState<boolean>(true);
   const [enableFlashLiteVerifier, setEnableFlashLiteVerifier] = useState<boolean>(false);
   const [showCalibrationModal, setShowCalibrationModal] = useState<boolean>(false);
+  const [showReanalyzeModal, setShowReanalyzeModal] = useState<boolean>(false);
+  const [isReanalyzing, setIsReanalyzing] = useState<boolean>(false);
   const [backendStatus, setBackendStatus] = useState<{
     geminiConfigured: boolean;
     openaiConfigured: boolean;
   }>({ geminiConfigured: true, openaiConfigured: false });
+  const [cacheTelemetry, setCacheTelemetry] = useState<{
+    fromCache: boolean;
+    cachedAt?: string;
+    hitCount?: number;
+    latencyMs?: number;
+  }>({ fromCache: false });
+  const [globalCacheStats, setGlobalCacheStats] = useState<{
+    debatesCached: number;
+    evaluationsCached: number;
+    embeddingsCached: number;
+    totalCacheHits: number;
+    recentDebates: Array<{
+      videoId: string;
+      title: string;
+      channel: string;
+      durationSeconds: number;
+      speaker1Name: string;
+      speaker1Role: string;
+      speaker2Name: string;
+      speaker2Role: string;
+      turnsCount: number;
+      cachedAt: string;
+      hitCount: number;
+    }>;
+  }>({
+    debatesCached: 3,
+    evaluationsCached: 0,
+    embeddingsCached: 0,
+    totalCacheHits: 0,
+    recentDebates: [],
+  });
 
-  // Playback & Execution Mode
-  const [executionMode, setExecutionMode] = useState<'sync' | 'batch'>('sync');
+  // Playback & Preview Sum Overlay Mode
+  const [showPreviewSum, setShowPreviewSum] = useState<boolean>(true);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [seekRequest, setSeekRequest] = useState<{ timestamp: number; nonce: number } | null>(
@@ -161,14 +197,28 @@ export default function App() {
   const [isTranscriptExpanded, setIsTranscriptExpanded] = useState<boolean>(false);
 
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  const evalAbortRef = useRef<AbortController | null>(null);
+  const [showDebugPanel, setShowDebugPanel] = useState<boolean>(false);
 
-  // Check backend API status on mount
+  const refreshGlobalCacheStats = useCallback(() => {
+    fetch('/api/cache/stats')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && typeof data.debatesCached === 'number') {
+          setGlobalCacheStats(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Check backend API & persistent cache status on mount
   useEffect(() => {
     fetch('/api/status')
       .then((r) => r.json())
       .then((data) => setBackendStatus(data))
       .catch(() => {});
-  }, []);
+    refreshGlobalCacheStats();
+  }, [refreshGlobalCacheStats]);
 
   // Run model evaluation whenever debate, models, or calibration changes
   const runEvaluationPipeline = useCallback(
@@ -179,8 +229,15 @@ export default function App() {
       compareActive: boolean,
       tau: number,
       contextExp: boolean,
-      verifier: boolean
+      verifier: boolean,
+      bypassCache = false
     ) => {
+      if (evalAbortRef.current) {
+        evalAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      evalAbortRef.current = controller;
+
       setIsProcessingBatch(true);
       try {
         const resA = await evaluateTranscriptTurns(
@@ -191,14 +248,38 @@ export default function App() {
           verifier,
           debate.speakers,
           (completed, total, status) => {
-            setBatchProgress({ completed, total, status });
+            if (!controller.signal.aborted) {
+              setBatchProgress({ completed, total, status });
+            }
+          },
+          {
+            videoId: debate.videoId,
+            bypassCache,
+            signal: controller.signal,
+            onPartialEvaluated: (partial) => {
+              if (!controller.signal.aborted) {
+                setPrimaryUtterances(partial);
+                setEvaluatedUtterancesByModel((prev) => ({
+                  ...prev,
+                  [modelA]: partial,
+                }));
+              }
+            },
           }
         );
+        if (controller.signal.aborted) return;
+
         setPrimaryUtterances(resA.evaluated);
         setEvaluatedUtterancesByModel((prev) => ({
           ...prev,
           [modelA]: resA.evaluated,
         }));
+        setCacheTelemetry({
+          fromCache: Boolean(resA.fromCache),
+          cachedAt: resA.cachedAt,
+          hitCount: resA.hitCount,
+          latencyMs: resA.latencyMs,
+        });
         setEngineSourceBadge(
           resA.source === 'live-api'
             ? `${modelA} · Live Vector API`
@@ -210,6 +291,7 @@ export default function App() {
         if (compareActive) {
           const modelsToEval = compareModelsList.filter((m) => m !== modelA);
           for (const mId of modelsToEval) {
+            if (controller.signal.aborted) break;
             setBatchProgress({
               completed: 0,
               total: debate.turns.length,
@@ -223,9 +305,25 @@ export default function App() {
               false,
               debate.speakers,
               (completed, total, status) => {
-                setBatchProgress({ completed, total, status: `[${mId}] ${status}` });
+                if (!controller.signal.aborted) {
+                  setBatchProgress({ completed, total, status: `[${mId}] ${status}` });
+                }
+              },
+              {
+                videoId: debate.videoId,
+                bypassCache,
+                signal: controller.signal,
+                onPartialEvaluated: (partial) => {
+                  if (!controller.signal.aborted) {
+                    setEvaluatedUtterancesByModel((prev) => ({
+                      ...prev,
+                      [mId]: partial,
+                    }));
+                  }
+                },
               }
             );
+            if (controller.signal.aborted) break;
             setEvaluatedUtterancesByModel((prev) => ({
               ...prev,
               [mId]: resM.evaluated,
@@ -235,11 +333,16 @@ export default function App() {
             }
           }
         }
+        if (!controller.signal.aborted) {
+          refreshGlobalCacheStats();
+        }
       } finally {
-        setIsProcessingBatch(false);
+        if (evalAbortRef.current === controller) {
+          setIsProcessingBatch(false);
+        }
       }
     },
-    []
+    [refreshGlobalCacheStats]
   );
 
   // Active sentence evaluated at or near playhead position
@@ -262,7 +365,8 @@ export default function App() {
       isCompareMode || activeSection === 'comparison',
       thresholdTau,
       useContextExpansion,
-      enableFlashLiteVerifier
+      enableFlashLiteVerifier,
+      false
     );
   }, [
     activeDebate,
@@ -342,12 +446,10 @@ export default function App() {
     }
   }, [primaryUtterances, vaultProfiles.length, activeDebate, primaryModel]);
 
-  // Effective timestamp cutoff: in 'sync' mode, utterances up to currentTime are dynamically evaluated;
-  // in 'batch' mode, the complete video profile is rendered while allowing the user to scrub the video from 0s.
-  const effectiveCutoffTime =
-    executionMode === 'sync' ? currentTime : undefined;
+  // Present-moment timestamp cutoff is always synced to the active video playhead
+  const effectiveCutoffTime = currentTime;
 
-  // Compute real-time speaker profiles for Primary Model
+  // Compute real-time present-moment speaker profiles (up to currentTime) for Primary Model
   const speaker1Profile = useMemo(
     () =>
       computeSpeakerProfile(
@@ -370,6 +472,31 @@ export default function App() {
         effectiveCutoffTime
       ),
     [primaryUtterances, activeDebate, effectiveCutoffTime]
+  );
+
+  // Compute full-conversation cumulative sum profiles (upToTimestamp = undefined) for the background Preview Sum overlay
+  const speaker1FinalProfile = useMemo(
+    () =>
+      computeSpeakerProfile(
+        primaryUtterances,
+        'speaker_1',
+        activeDebate.speakers.speaker_1.name,
+        activeDebate.speakers.speaker_1.color,
+        undefined
+      ),
+    [primaryUtterances, activeDebate]
+  );
+
+  const speaker2FinalProfile = useMemo(
+    () =>
+      computeSpeakerProfile(
+        primaryUtterances,
+        'speaker_2',
+        activeDebate.speakers.speaker_2.name,
+        activeDebate.speakers.speaker_2.color,
+        undefined
+      ),
+    [primaryUtterances, activeDebate]
   );
 
   // Compute multi-model profiles for all selected comparison models
@@ -445,6 +572,34 @@ export default function App() {
     }
 
     const layers: RadarPolygonLayer[] = [];
+
+    // When Preview Sum is active, render faint dashed full-conversation cumulative polygons in the background first
+    if (showPreviewSum) {
+      if (speakerOverlayMode === 'both' || speakerOverlayMode === 'speaker_1') {
+        layers.push({
+          id: 'speaker_1_sum',
+          label: `${activeDebate.speakers.speaker_1.name} (Preview Sum)`,
+          sublabel: 'Final Cumulative Sum',
+          color: '#06B6D4',
+          profile: speaker1FinalProfile,
+          dashed: true,
+          isGhostSum: true,
+        });
+      }
+      if (speakerOverlayMode === 'both' || speakerOverlayMode === 'speaker_2') {
+        layers.push({
+          id: 'speaker_2_sum',
+          label: `${activeDebate.speakers.speaker_2.name} (Preview Sum)`,
+          sublabel: 'Final Cumulative Sum',
+          color: '#F59E0B',
+          profile: speaker2FinalProfile,
+          dashed: true,
+          isGhostSum: true,
+        });
+      }
+    }
+
+    // Foreground present-moment polygons (synced to currentTime)
     if (speakerOverlayMode === 'both' || speakerOverlayMode === 'speaker_1') {
       layers.push({
         id: 'speaker_1',
@@ -467,19 +622,23 @@ export default function App() {
   }, [
     isCompareMode,
     activeSection,
-    primaryModel,
-    comparisonModel,
     activeDebate,
     compareSpeakerTarget,
     multiModelProfiles,
-    compareModelProfileA,
-    compareModelProfileB,
     vaultProfiles,
     selectedVaultIds,
     speakerOverlayMode,
+    showPreviewSum,
     speaker1Profile,
     speaker2Profile,
+    speaker1FinalProfile,
+    speaker2FinalProfile,
   ]);
+
+  const foregroundRadarLayers = useMemo(
+    () => activeRadarLayers.filter((l) => !l.isGhostSum),
+    [activeRadarLayers]
+  );
 
   // Global scale bound across all active layers so side-by-side radar maps share identical dimensions
   const globalScaleBound = useMemo(() => {
@@ -587,6 +746,7 @@ export default function App() {
       setCurrentTime(0);
       setSeekRequest({ timestamp: 0, nonce: Date.now() });
       setIsPlaying(false);
+      refreshGlobalCacheStats();
     } catch (err: any) {
       let msg = err?.message || 'Unable to load custom stream; loaded nearest benchmark debate.';
       try {
@@ -612,18 +772,135 @@ export default function App() {
     setSeekRequest({ timestamp: 0, nonce: Date.now() });
   };
 
-  const handleProcessAllFastBatch = async () => {
+  const handleSelectCachedDebateById = async (videoId: string) => {
+    const preset = PRE_INDEXED_DEBATES.find((d) => d.videoId === videoId);
+    if (preset) {
+      handleSelectPreIndexed(preset);
+      return;
+    }
+    setIngestError(null);
+    setIsIngestingVideo(true);
+    try {
+      const res = await fetch(`/api/cache/debate/${encodeURIComponent(videoId)}`);
+      if (!res.ok) throw new Error('Could not load cached debate');
+      const data = await res.json();
+      const customDebate: PreIndexedDebate = {
+        id: `cached-${data.videoId}`,
+        title: data.title || `Cached Analysis: ${videoId}`,
+        subtitle: `Diarized Conversation · ${data.speaker1Name} & ${data.speaker2Name}`,
+        videoId: data.videoId,
+        youtubeUrl: /^[a-zA-Z0-9_-]{11}$/.test(data.videoId)
+          ? `https://www.youtube.com/watch?v=${data.videoId}`
+          : data.title,
+        channel: data.channel || 'YouTube Stream',
+        durationSeconds: data.durationSeconds || 180,
+        keywords: [data.title],
+        speakers: {
+          speaker_1: {
+            id: 'speaker_1',
+            name: data.speaker1Name || 'Speaker 1',
+            role: data.speaker1Role || 'Primary Interlocutor',
+            color: '#06B6D4',
+          },
+          speaker_2: {
+            id: 'speaker_2',
+            name: data.speaker2Name || 'Speaker 2',
+            role: data.speaker2Role || 'Counter-Interlocutor',
+            color: '#F59E0B',
+          },
+        },
+        turns: (data.turns || []).map((t: any, idx: number) => ({
+          id: t.id || `cached-t-${idx + 1}`,
+          timestamp: Math.round(Number(t.timestamp) || idx * 6),
+          endTime: Math.round(Number(t.endTime) || (idx + 1) * 6),
+          speakerId: t.speakerId === 'speaker_2' ? 'speaker_2' : 'speaker_1',
+          text: (t.text || '').trim(),
+        })),
+      };
+      setActiveDebate(customDebate);
+      setSearchInput(customDebate.youtubeUrl);
+      setCurrentTime(0);
+      setSeekRequest({ timestamp: 0, nonce: Date.now() });
+      setIsPlaying(false);
+    } catch (e: any) {
+      setIngestError(e?.message || 'Failed to load cached conversation');
+    } finally {
+      setIsIngestingVideo(false);
+    }
+  };
+
+  const handleConfirmReanalyze = async () => {
+    setShowReanalyzeModal(false);
+    setIsReanalyzing(true);
     setIsPlaying(false);
-    setExecutionMode('batch');
-    await runEvaluationPipeline(
-      activeDebate,
-      primaryModel,
-      selectedCompareModels,
-      isCompareMode || activeSection === 'comparison',
-      thresholdTau,
-      useContextExpansion,
-      enableFlashLiteVerifier
-    );
+    setIngestError(null);
+    clearClientEmbeddingCache();
+
+    try {
+      await fetch('/api/cache/invalidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoId: activeDebate.videoId }),
+      });
+
+      const response = await fetch('/api/youtube-ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queryOrUrl: activeDebate.youtubeUrl || activeDebate.videoId,
+          videoId: activeDebate.videoId,
+          forceReanalyze: true,
+        }),
+      });
+
+      let targetDebate = activeDebate;
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data.turns) && data.turns.length > 0) {
+          targetDebate = {
+            ...activeDebate,
+            title: data.title || activeDebate.title,
+            channel: data.channel || activeDebate.channel,
+            durationSeconds: data.durationSeconds || activeDebate.durationSeconds,
+            speakers: {
+              speaker_1: {
+                ...activeDebate.speakers.speaker_1,
+                name: data.speaker1Name || activeDebate.speakers.speaker_1.name,
+                role: data.speaker1Role || activeDebate.speakers.speaker_1.role,
+              },
+              speaker_2: {
+                ...activeDebate.speakers.speaker_2,
+                name: data.speaker2Name || activeDebate.speakers.speaker_2.name,
+                role: data.speaker2Role || activeDebate.speakers.speaker_2.role,
+              },
+            },
+            turns: data.turns.map((t: any, idx: number) => ({
+              id: t.id || `reanalyzed-t-${idx + 1}`,
+              timestamp: Math.round(Number(t.timestamp) || idx * 6),
+              endTime: Math.round(Number(t.endTime) || (idx + 1) * 6),
+              speakerId: t.speakerId === 'speaker_2' ? 'speaker_2' : 'speaker_1',
+              text: (t.text || '').trim(),
+            })),
+          };
+          setActiveDebate(targetDebate);
+        }
+      }
+
+      await runEvaluationPipeline(
+        targetDebate,
+        primaryModel,
+        selectedCompareModels,
+        isCompareMode || activeSection === 'comparison',
+        thresholdTau,
+        useContextExpansion,
+        enableFlashLiteVerifier,
+        true
+      );
+    } catch (err: any) {
+      setIngestError(err?.message || 'Re-analysis encountered an error.');
+    } finally {
+      setIsReanalyzing(false);
+    }
   };
 
   const handleSeekToTimestamp = (seconds: number, _utteranceId?: string) => {
@@ -1038,63 +1315,89 @@ export default function App() {
           <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 lg:gap-5 items-start">
             {/* LEFT PANEL (5 cols on narrow desktop md/lg, 4 cols on xl): Video Playback & Synchronized Diarized Transcript */}
             <div className="md:col-span-5 lg:col-span-5 xl:col-span-4 flex flex-col gap-3.5">
-              {/* Stream Header & Execution Mode Bar */}
-              <div className="bg-[#111827] border border-slate-800 rounded-md p-4 space-y-3">
+              {/* Stream Header (Clean Title, Re-analyze & Debug actions) */}
+              <div className="bg-[#111827] border border-slate-800 rounded-md p-4 space-y-2.5">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-xs text-slate-400 font-mono">
-                      {activeDebate.channel} · ID: {activeDebate.videoId} · {engineSourceBadge}
-                    </div>
-                    <h1 className="text-base font-bold text-slate-100 leading-snug mt-0.5">
-                      {activeDebate.title}
-                    </h1>
+                  <h1 className="text-base font-bold text-slate-100 leading-snug min-w-0 flex-1">
+                    {activeDebate.title}
+                  </h1>
+
+                  <div className="flex flex-col items-end gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowReanalyzeModal(true)}
+                      disabled={isReanalyzing || isProcessingBatch || isIngestingVideo}
+                      title="Invalidate cached transcript & vector evaluations for this conversation and run a fresh analysis"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#07090E] hover:bg-slate-900 text-slate-300 hover:text-cyan-300 border border-slate-700 hover:border-cyan-500/50 rounded text-xs font-mono transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50"
+                    >
+                      <RotateCcw className={`w-3.5 h-3.5 text-cyan-400 ${isReanalyzing ? 'animate-spin' : ''}`} />
+                      <span>{isReanalyzing ? 'Re-analyzing...' : 'Re-analyze'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowDebugPanel((prev) => !prev)}
+                      className={`flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono rounded border transition-colors cursor-pointer ${
+                        showDebugPanel
+                          ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-300'
+                          : 'bg-[#07090E] hover:bg-slate-900 text-slate-400 hover:text-slate-200 border-slate-800'
+                      }`}
+                      title="Toggle stream & engine diagnostics"
+                      aria-expanded={showDebugPanel}
+                    >
+                      <Bug className="w-3 h-3 text-cyan-400" />
+                      <span>Debug</span>
+                    </button>
                   </div>
                 </div>
 
-                {/* Execution Mode Toggle: Sync to Playback vs. Process All (One-Tap Fast Batch) */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
-                  <div className="flex items-center gap-1 p-1 bg-[#07090E] border border-slate-800 rounded">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setExecutionMode('sync');
-                        if (currentTime >= activeDebate.durationSeconds) {
-                          setCurrentTime(55);
-                        }
-                      }}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        executionMode === 'sync'
-                          ? 'bg-cyan-500 text-slate-950'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Play className="w-3 h-3" />
-                      <span>Sync to Playback</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleProcessAllFastBatch}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        executionMode === 'batch'
-                          ? 'bg-cyan-500 text-slate-950'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Zap className="w-3 h-3" />
-                      <span>Process All (Fast Batch)</span>
-                    </button>
+                {/* Unique Diagnostics & Telemetry Info (Toggled via Debug button below Re-analyze) */}
+                {showDebugPanel && (
+                  <div className="p-2.5 bg-[#07090E] border border-slate-800 rounded text-[11px] font-mono space-y-1.5">
+                    <div className="flex items-center justify-between text-slate-400 border-b border-slate-800/80 pb-1">
+                      <span className="font-semibold text-cyan-400 uppercase tracking-wider text-[10px]">
+                        Stream & Engine Diagnostics
+                      </span>
+                      <span className="text-slate-500 text-[10px]">ID: {activeDebate.videoId}</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-slate-300">
+                      <div>
+                        <span className="text-slate-500">Channel: </span>
+                        <span>{activeDebate.channel}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Engine: </span>
+                        <span>{engineSourceBadge}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Cache Status: </span>
+                        <span className={cacheTelemetry.fromCache ? 'text-emerald-400' : 'text-cyan-400'}>
+                          {cacheTelemetry.fromCache ? 'Shared Disk Hit' : 'Persisted'} ({cacheTelemetry.latencyMs || 1} ms)
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Session Reuse: </span>
+                        <span>{cacheTelemetry.hitCount || 1}×</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Total Indexed: </span>
+                        <span>{globalCacheStats.debatesCached} conversations</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Global Hits: </span>
+                        <span>{globalCacheStats.totalCacheHits}</span>
+                      </div>
+                    </div>
                   </div>
+                )}
 
-                  <div className="text-xs font-mono tabular-nums text-slate-400">
-                    τ = {thresholdTau.toFixed(2)} ·{' '}
-                    {
-                      primaryUtterances.filter(
-                        (u) =>
-                          effectiveCutoffTime === undefined || u.timestamp <= effectiveCutoffTime
-                      ).length
-                    }
-                    /{primaryUtterances.length || activeDebate.turns.length} sentences active
-                  </div>
+                {/* Active Sentence Processing Counter (Live Playback Sync element removed per user request) */}
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800 text-xs font-mono tabular-nums text-slate-400">
+                  <span>τ = {thresholdTau.toFixed(2)}</span>
+                  <span>
+                    {primaryUtterances.filter((u) => u.timestamp <= effectiveCutoffTime).length}/
+                    {primaryUtterances.length || activeDebate.turns.length} sentences active
+                  </span>
                 </div>
 
                 {/* Batch Processing Progress Bar */}
@@ -1255,8 +1558,7 @@ export default function App() {
                     {primaryUtterances.map((utt) => {
                       const isCurrentSentence =
                         currentTime >= utt.timestamp && currentTime < utt.endTime;
-                      const isFutureInSync =
-                        executionMode === 'sync' && utt.timestamp > currentTime;
+                      const isFutureInSync = utt.timestamp > currentTime;
 
                       return (
                         <div
@@ -1364,7 +1666,7 @@ export default function App() {
                       </h2>
                     </div>
 
-                    {/* Controls: Speaker Selection, Save & Radar View Mode */}
+                    {/* Controls: Speaker Selection, Preview Sum Toggle, Save & Radar View Mode */}
                     <div className="flex flex-wrap items-center gap-1.5">
                       {/* Speaker Selector (Visible in Real-time workspace mode) */}
                       {!(isCompareMode || activeSection === 'comparison') &&
@@ -1404,6 +1706,35 @@ export default function App() {
                               {activeDebate.speakers.speaker_2.name.split(' ').pop()}
                             </button>
                           </div>
+                        )}
+
+                      {/* Preview Sum Toggle (Displays faint dashed final cumulative radar map in background) */}
+                      {!(isCompareMode || activeSection === 'comparison') &&
+                        activeSection !== 'vault' && (
+                          <button
+                            type="button"
+                            onClick={() => setShowPreviewSum((prev) => !prev)}
+                            aria-pressed={showPreviewSum}
+                            title={
+                              showPreviewSum
+                                ? 'Preview Sum enabled: Showing faint dashed final cumulative radar map behind present-moment map'
+                                : 'Preview Sum disabled: Showing present-moment radar map only'
+                            }
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                              showPreviewSum
+                                ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-300 shadow-xs'
+                                : 'bg-[#07090E] border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                            }`}
+                          >
+                            <CircleDotDashed className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Preview Sum</span>
+                            {isProcessingBatch && showPreviewSum && (
+                              <span
+                                className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"
+                                title="Progressively evaluating conversation in rate-limit safe chunks..."
+                              />
+                            )}
+                          </button>
                         )}
 
                       {/* Save to History Vault Button */}
@@ -1571,48 +1902,53 @@ export default function App() {
                   ) : (
                     <div
                       className={`grid gap-3 py-1 ${
-                        activeRadarLayers.length >= 2
+                        foregroundRadarLayers.length >= 2
                           ? 'grid-cols-1 sm:grid-cols-2'
                           : 'grid-cols-1'
                       }`}
                     >
-                      {activeRadarLayers.map((layer) => (
-                        <div
-                          key={`side-by-side-${layer.id}`}
-                          className="bg-[#07090E] border border-slate-800/90 rounded-md p-2.5 flex flex-col items-center space-y-1.5"
-                        >
-                          <div className="w-full flex items-center justify-between text-xs px-1 border-b border-slate-800/80 pb-1.5">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span
-                                className="w-2.5 h-2.5 rounded-xs shrink-0"
-                                style={{ backgroundColor: layer.color }}
-                              />
-                              <span className="font-semibold text-slate-100 truncate text-xs">
-                                {layer.label}
-                              </span>
+                      {foregroundRadarLayers.map((layer) => {
+                        const ghostLayer = activeRadarLayers.find(
+                          (g) => g.isGhostSum && g.id === `${layer.id}_sum`
+                        );
+                        return (
+                          <div
+                            key={`side-by-side-${layer.id}`}
+                            className="bg-[#07090E] border border-slate-800/90 rounded-md p-2.5 flex flex-col items-center space-y-1.5"
+                          >
+                            <div className="w-full flex items-center justify-between text-xs px-1 border-b border-slate-800/80 pb-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  className="w-2.5 h-2.5 rounded-xs shrink-0"
+                                  style={{ backgroundColor: layer.color }}
+                                />
+                                <span className="font-semibold text-slate-100 truncate text-xs">
+                                  {layer.label}
+                                </span>
+                              </div>
+                              <div className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
+                                <span className="text-cyan-400 font-semibold">
+                                  θ={layer.profile.centroid.angleDeg.toFixed(0)}°
+                                </span>{' '}
+                                · r={layer.profile.centroid.magnitude.toFixed(2)}
+                              </div>
                             </div>
-                            <div className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
-                              <span className="text-cyan-400 font-semibold">
-                                θ={layer.profile.centroid.angleDeg.toFixed(0)}°
-                              </span>{' '}
-                              · r={layer.profile.centroid.magnitude.toFixed(2)}
-                            </div>
+                            <RadarCircumplex
+                              layers={ghostLayer ? [ghostLayer, layer] : [layer]}
+                              utterances={primaryUtterances}
+                              selectedValueId={selectedValueId}
+                              onSelectValue={setSelectedValueId}
+                              onSeekToTimestamp={handleSeekToTimestamp}
+                              showScatterPoints={showScatterPoints}
+                              showCentroidVectors={showCentroidVectors}
+                              upToTimestamp={effectiveCutoffTime}
+                              className="max-w-[340px]"
+                              fixedScaleBound={globalScaleBound}
+                              isCompact={true}
+                            />
                           </div>
-                          <RadarCircumplex
-                            layers={[layer]}
-                            utterances={primaryUtterances}
-                            selectedValueId={selectedValueId}
-                            onSelectValue={setSelectedValueId}
-                            onSeekToTimestamp={handleSeekToTimestamp}
-                            showScatterPoints={showScatterPoints}
-                            showCentroidVectors={showCentroidVectors}
-                            upToTimestamp={effectiveCutoffTime}
-                            className="max-w-[340px]"
-                            fixedScaleBound={globalScaleBound}
-                            isCompact={true}
-                          />
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
 
@@ -1620,7 +1956,7 @@ export default function App() {
                   <div className="pt-3 border-t border-slate-800 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-3 text-xs">
-                        {activeRadarLayers.map((layer) => (
+                        {foregroundRadarLayers.map((layer) => (
                           <div key={layer.id} className="flex items-center gap-1.5">
                             <span
                               className="w-2.5 h-2.5 rounded-xs inline-block"
@@ -1633,6 +1969,14 @@ export default function App() {
                             </span>
                           </div>
                         ))}
+                        {!(isCompareMode || activeSection === 'comparison') &&
+                          activeSection !== 'vault' &&
+                          showPreviewSum && (
+                            <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-400">
+                              <span className="w-3.5 border-t border-dashed border-cyan-400/70 inline-block" />
+                              <span>Dashed = Preview Sum (Final)</span>
+                            </div>
+                          )}
                       </div>
 
                       {/* Visual Layer Toggles */}
@@ -1706,7 +2050,7 @@ export default function App() {
                   {/* View Content: Ultra-Compact Multi-Dimensional Bipolar Report for ALL vs. Single Value Axis Deep-Dive */}
                   {selectedValueId === 'all' ? (
                     <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-                      {activeRadarLayers.map((layer) => {
+                      {foregroundRadarLayers.map((layer) => {
                         const { centroid } = layer.profile;
                         const xVal = centroid.opennessVsConservation;
                         const yVal = centroid.transcendenceVsEnhancement;
@@ -2230,7 +2574,7 @@ export default function App() {
               {/* Server-Side Credentials Status */}
               <div className="p-3 bg-[#07090E] border border-slate-800 rounded space-y-1.5 font-mono">
                 <div className="text-slate-300 font-semibold flex items-center gap-1.5">
-                  <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                  <CircleDotDashed className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Provider Telemetry & Environment Secrets</span>
                 </div>
                 <div className="text-[11px] text-slate-400 space-y-1">
@@ -2262,8 +2606,52 @@ export default function App() {
                         : 'Configure OPENAI_API_KEY in AI Studio Settings > Secrets'}
                     </span>
                   </div>
+                  <div>
+                    Shared Persistent Disk Cache:{' '}
+                    <span className="text-emerald-400 tabular-nums">
+                      ● Active ({globalCacheStats.debatesCached} debates ·{' '}
+                      {globalCacheStats.evaluationsCached} model evaluations ·{' '}
+                      {globalCacheStats.embeddingsCached} vectors)
+                    </span>
+                  </div>
                 </div>
               </div>
+
+              {globalCacheStats.recentDebates.length > 0 && (
+                <div className="p-3 bg-[#07090E] border border-slate-800 rounded space-y-2">
+                  <div className="text-slate-300 font-semibold font-mono text-[11px] flex items-center justify-between">
+                    <span>Cached Conversations Available Globally</span>
+                    <span className="text-slate-400 tabular-nums">
+                      {globalCacheStats.totalCacheHits} total hits
+                    </span>
+                  </div>
+                  <div className="max-h-28 overflow-y-auto divide-y divide-slate-800/70">
+                    {globalCacheStats.recentDebates.map((item) => (
+                      <div
+                        key={item.videoId}
+                        className="py-1.5 flex items-center justify-between gap-2 text-[11px]"
+                      >
+                        <div className="truncate text-slate-300">
+                          <span className="font-semibold">{item.title}</span>{' '}
+                          <span className="text-slate-500 font-mono">
+                            · {item.turnsCount} turns · {item.hitCount}× hits
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowCalibrationModal(false);
+                            handleSelectCachedDebateById(item.videoId);
+                          }}
+                          className="text-cyan-400 hover:text-cyan-300 font-mono whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          Load
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
@@ -2284,6 +2672,61 @@ export default function App() {
                 className="px-4 py-1.5 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-semibold rounded text-xs cursor-pointer"
               >
                 Apply Calibration
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* User-Confirmed Re-Analyze Conversation Modal */}
+      {showReanalyzeModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+          <div className="bg-[#111827] border border-slate-700 rounded-md max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-amber-400" />
+                <h2 className="text-base font-bold text-slate-100">
+                  Confirm Conversation Re-analysis
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowReanalyzeModal(false)}
+                className="text-xs font-mono text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                [ESC]
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
+              <p>
+                This conversation (<span className="font-semibold text-slate-100">{activeDebate.title}</span>) is
+                stored in the shared persistent disk cache so no user has to re-process it.
+              </p>
+              <div className="p-3 bg-[#07090E] border border-slate-800 rounded space-y-1.5 font-mono text-[11px] text-slate-400">
+                <div className="text-slate-200 font-semibold">
+                  Actions performed upon confirmation:
+                </div>
+                <div>1. Invalidate cached transcript &amp; speaker diarization (ID: {activeDebate.videoId})</div>
+                <div>2. Re-fetch captions and re-compute Schwartz PVQ vector deltas</div>
+                <div>3. Update shared persistent disk cache for all future sessions</div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowReanalyzeModal(false)}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-medium cursor-pointer"
+              >
+                Keep Cached Analysis
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReanalyze}
+                className="px-4 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold rounded text-xs cursor-pointer"
+              >
+                Confirm &amp; Re-analyze
               </button>
             </div>
           </div>

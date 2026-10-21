@@ -20,6 +20,7 @@ export interface RadarPolygonLayer {
   color: string;
   profile: SpeakerValueProfile;
   dashed?: boolean;
+  isGhostSum?: boolean;
 }
 
 interface RadarCircumplexProps {
@@ -327,16 +328,18 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
           });
 
           const polygonPoints = vertices.map((v) => `${v.x},${v.y}`).join(' ');
+          const isGhost = Boolean(layer.isGhostSum);
 
           return (
-            <g key={layer.id}>
+            <g key={layer.id} opacity={isGhost ? 0.58 : 1}>
               <polygon
                 points={polygonPoints}
                 fill={layer.color}
-                fillOpacity={layer.dashed ? 0.1 : 0.18}
+                fillOpacity={isGhost ? 0.05 : layer.dashed ? 0.1 : 0.18}
                 stroke={layer.color}
-                strokeWidth={2.25}
-                strokeDasharray={layer.dashed ? '6 3' : undefined}
+                strokeOpacity={isGhost ? 0.65 : 1}
+                strokeWidth={isGhost ? 1.5 : 2.25}
+                strokeDasharray={isGhost ? '5 3' : layer.dashed ? '6 3' : undefined}
                 strokeLinejoin="round"
                 className="transition-all duration-150"
               />
@@ -345,10 +348,11 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
                   key={`${layer.id}-${v.axis.id}`}
                   cx={v.x}
                   cy={v.y}
-                  r={selectedValueId === v.axis.id ? 5 : 3.5}
+                  r={isGhost ? 2.2 : selectedValueId === v.axis.id ? 5 : 3.5}
                   fill="#07090E"
                   stroke={layer.color}
-                  strokeWidth={2.2}
+                  strokeOpacity={isGhost ? 0.65 : 1}
+                  strokeWidth={isGhost ? 1.4 : 2.2}
                   onClick={() => onSelectValue(v.axis.id)}
                   className="cursor-pointer"
                 />
@@ -419,6 +423,7 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
           layers.map((layer) => {
             const { centroid } = layer.profile;
             if (centroid.magnitude < 0.01) return null;
+            const isGhost = Boolean(layer.isGhostSum);
 
             const arrowLen = Math.min(
               neutralRadius - 12,
@@ -427,14 +432,15 @@ export const RadarCircumplex: React.FC<RadarCircumplexProps> = ({
             const tip = polarToCartesian(cx, cy, arrowLen, centroid.angleDeg);
 
             return (
-              <g key={`centroid-${layer.id}`}>
+              <g key={`centroid-${layer.id}`} opacity={isGhost ? 0.35 : 1}>
                 <line
                   x1={cx}
                   y1={cy}
                   x2={tip.x}
                   y2={tip.y}
                   stroke={layer.color}
-                  strokeWidth={2.5}
+                  strokeWidth={isGhost ? 1.5 : 2.5}
+                  strokeDasharray={isGhost ? '4 2' : undefined}
                   markerEnd={`url(#centroid-arrow-${layer.id})`}
                 />
               </g>

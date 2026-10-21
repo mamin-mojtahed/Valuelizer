@@ -358,7 +358,16 @@ export async function getDualAnchorVectors(
 }
 
 /**
- * Evaluate a batch or single turn of transcript utterances against the 10 Dual-Anchor Schwartz vectors
+ * Clear in-memory client embedding cache (used when user confirms a full re-analysis)
+ */
+export function clearClientEmbeddingCache(): void {
+  textEmbeddingCache.clear();
+}
+
+/**
+ * Evaluate a batch or single turn of transcript utterances against the 10 Dual-Anchor Schwartz vectors.
+ * Automatically queries and populates the shared server-side persistent disk cache so no conversation
+ * + calibration combination is ever computed more than once across any user session.
  */
 export async function evaluateTranscriptTurns(
   turns: TranscriptTurn[],
@@ -370,13 +379,75 @@ export async function evaluateTranscriptTurns(
     speaker_1: { name: string; role: string };
     speaker_2: { name: string; role: string };
   },
-  onProgress?: (completed: number, total: number, status: string) => void
+  onProgress?: (completed: number, total: number, status: string) => void,
+  options?: {
+    videoId?: string;
+    bypassCache?: boolean;
+    onPartialEvaluated?: (partial: EvaluatedUtterance[]) => void;
+    signal?: AbortSignal;
+  }
 ): Promise<{
   evaluated: EvaluatedUtterance[];
   source: 'live-api' | 'local-wasm' | 'calibrated-engine';
+  fromCache?: boolean;
+  cachedAt?: string;
+  hitCount?: number;
+  latencyMs?: number;
 }> {
+  const startEvalTime = performance.now();
+  const videoId = options?.videoId;
+  const bypassCache = Boolean(options?.bypassCache);
+  const onPartialEvaluated = options?.onPartialEvaluated;
+  const signal = options?.signal;
+
+  // 0. Check Tier-2 Shared Server-Side Evaluation Disk Cache first
+  if (videoId && !bypassCache && turns.length > 0) {
+    try {
+      const params = new URLSearchParams({
+        videoId,
+        modelId,
+        tau: String(thresholdTau),
+        useContextExpansion: String(useContextExpansion),
+        enableFlashLiteVerifier: String(enableFlashLiteVerifier),
+        turnsCount: String(turns.length),
+      });
+      const cacheRes = await fetch(`/api/evaluation-cache?${params.toString()}`, { signal });
+      if (cacheRes.ok) {
+        const cacheData = (await cacheRes.json()) as {
+          hit: boolean;
+          evaluated?: EvaluatedUtterance[];
+          source?: 'live-api' | 'local-wasm' | 'calibrated-engine';
+          cachedAt?: string;
+          hitCount?: number;
+          latencyMs?: number;
+        };
+        if (cacheData.hit && Array.isArray(cacheData.evaluated) && cacheData.evaluated.length > 0) {
+          onProgress?.(
+            cacheData.evaluated.length,
+            cacheData.evaluated.length,
+            `Loaded from shared persistent disk cache (${cacheData.latencyMs || 1} ms).`
+          );
+          onPartialEvaluated?.(cacheData.evaluated);
+          return {
+            evaluated: cacheData.evaluated,
+            source: cacheData.source || 'calibrated-engine',
+            fromCache: true,
+            cachedAt: cacheData.cachedAt,
+            hitCount: cacheData.hitCount || 1,
+            latencyMs: cacheData.latencyMs || Math.max(1, Math.round(performance.now() - startEvalTime)),
+          };
+        }
+      }
+    } catch (_e) {
+      // Non-fatal: proceed to progressive evaluation if cache endpoint is unreachable
+    }
+  }
+
   // 1. Segment all conversational turns into granular, exact sentence-level units
   const sentences = segmentTurnsIntoSentences(turns);
+  if (sentences.length === 0) {
+    return { evaluated: [], source: 'calibrated-engine', fromCache: false, latencyMs: 1 };
+  }
 
   onProgress?.(
     0,
@@ -395,47 +466,101 @@ export async function evaluateTranscriptTurns(
       : sent.text;
   });
 
-  onProgress?.(
-    Math.max(1, Math.floor(sentences.length * 0.2)),
-    sentences.length,
-    `Embedding ${sentences.length} discrete sentences via ${modelId}...`
-  );
+  // 3. Progressive Rate-Limit Considerate Chunking:
+  // Evaluate in polite chunks of 16 sentences with 360ms pacing between live API batches
+  // so present-moment playback renders immediately and Preview Sum builds smoothly without hitting rate limits.
+  const CHUNK_SIZE = 16;
+  const PACING_DELAY_MS = 360;
+  const evaluated: EvaluatedUtterance[] = [];
+  let finalSource: 'live-api' | 'local-wasm' | 'calibrated-engine' = 'calibrated-engine';
 
-  const { vectors, source } = await embedTextsWithModel(
-    expandedInputs,
-    modelId,
-    (msg) => onProgress?.(Math.floor(sentences.length * 0.4), sentences.length, msg)
-  );
+  for (let startIdx = 0; startIdx < sentences.length; startIdx += CHUNK_SIZE) {
+    if (signal?.aborted) {
+      break;
+    }
 
-  const evaluated: EvaluatedUtterance[] = sentences.map((sent, idx) => {
-    const prevSentenceText = idx > 0 ? sentences[idx - 1].text : undefined;
-    const contextExpandedInput = expandedInputs[idx];
-    const deltas = computeDualAnchorDeltas(vectors[idx], anchorVectors, thresholdTau);
-    const dominantBadges = extractDominantBadges(deltas, 3);
-    const speakerMeta = speakers ? speakers[sent.speakerId] : undefined;
+    const endIdx = Math.min(sentences.length, startIdx + CHUNK_SIZE);
+    const chunkSentences = sentences.slice(startIdx, endIdx);
+    const chunkInputs = expandedInputs.slice(startIdx, endIdx);
 
+    // Check if any input in this chunk is uncached on the client
+    const hasUncachedInChunk = chunkInputs.some((txt) => !textEmbeddingCache.has(`${modelId}::${txt}`));
+
+    // Polite rate-limit pacing before subsequent uncached chunks
+    if (startIdx > 0 && hasUncachedInChunk && modelId !== 'local-minilm') {
+      onProgress?.(
+        startIdx,
+        sentences.length,
+        `Rate-limit pacing · Progressive background sum (${startIdx}/${sentences.length} sentences)...`
+      );
+      await new Promise((r) => setTimeout(r, PACING_DELAY_MS));
+      if (signal?.aborted) break;
+    } else {
+      onProgress?.(
+        startIdx,
+        sentences.length,
+        `Embedding sentences ${startIdx + 1}–${endIdx} of ${sentences.length} (${modelId})...`
+      );
+    }
+
+    const { vectors, source } = await embedTextsWithModel(
+      chunkInputs,
+      modelId,
+      (msg) => onProgress?.(startIdx, sentences.length, msg)
+    );
+    finalSource = source;
+
+    for (let i = 0; i < chunkSentences.length; i++) {
+      const globalIdx = startIdx + i;
+      const sent = chunkSentences[i];
+      const prevSentenceText = globalIdx > 0 ? sentences[globalIdx - 1].text : undefined;
+      const contextExpandedInput = chunkInputs[i];
+      const deltas = computeDualAnchorDeltas(vectors[i], anchorVectors, thresholdTau);
+      const dominantBadges = extractDominantBadges(deltas, 3);
+      const speakerMeta = speakers ? speakers[sent.speakerId] : undefined;
+
+      evaluated.push({
+        id: sent.id,
+        turnId: sent.turnId,
+        sentenceIndex: sent.sentenceIndex,
+        timestamp: sent.timestamp,
+        endTime: sent.endTime,
+        speakerId: sent.speakerId,
+        speakerName: speakerMeta?.name || (sent.speakerId === 'speaker_1' ? 'Speaker 1' : 'Speaker 2'),
+        speakerRole: speakerMeta?.role || 'Interlocutor',
+        text: sent.text,
+        previousText: prevSentenceText,
+        contextExpandedInput,
+        deltas,
+        dominantBadges,
+      });
+    }
+
+    // Stream partial evaluated utterances to UI so present-moment and Preview Sum update smoothly
+    onPartialEvaluated?.([...evaluated]);
+    onProgress?.(
+      evaluated.length,
+      sentences.length,
+      evaluated.length < sentences.length
+        ? `Processed ${evaluated.length}/${sentences.length} sentences (rate-limit paced)...`
+        : `Completed all ${sentences.length} sentences.`
+    );
+  }
+
+  if (signal?.aborted) {
     return {
-      id: sent.id,
-      turnId: sent.turnId,
-      sentenceIndex: sent.sentenceIndex,
-      timestamp: sent.timestamp,
-      endTime: sent.endTime,
-      speakerId: sent.speakerId,
-      speakerName: speakerMeta?.name || (sent.speakerId === 'speaker_1' ? 'Speaker 1' : 'Speaker 2'),
-      speakerRole: speakerMeta?.role || 'Interlocutor',
-      text: sent.text,
-      previousText: prevSentenceText,
-      contextExpandedInput,
-      deltas,
-      dominantBadges,
+      evaluated,
+      source: finalSource,
+      fromCache: false,
+      latencyMs: Math.max(1, Math.round(performance.now() - startEvalTime)),
     };
-  });
+  }
 
   // Optional Alternative 3: Flash-Lite Hybrid Verifier for ambiguous/high-conflict turns
   if (enableFlashLiteVerifier && evaluated.length > 0) {
     onProgress?.(
-      Math.floor(turns.length * 0.8),
-      turns.length,
+      Math.floor(sentences.length * 0.9),
+      sentences.length,
       'Running Flash-Lite Hybrid Verifier on high-conflict turns...'
     );
     try {
@@ -454,6 +579,7 @@ export async function evaluateTranscriptTurns(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ utterances: payload }),
+        signal,
       });
 
       if (res.ok) {
@@ -472,14 +598,43 @@ export async function evaluateTranscriptTurns(
             item.verifierAudit = verified;
           }
         }
+        onPartialEvaluated?.([...evaluated]);
       }
     } catch (_e) {
       // Non-fatal if verifier endpoint is offline
     }
   }
 
-  onProgress?.(turns.length, turns.length, 'Evaluation complete.');
-  return { evaluated, source };
+  const totalLatencyMs = Math.max(1, Math.round(performance.now() - startEvalTime));
+  const nowIso = new Date().toISOString();
+
+  // 4. Persist complete computed evaluation to shared server-side disk cache for all future users
+  if (videoId && evaluated.length === sentences.length && evaluated.length > 0) {
+    fetch('/api/evaluation-cache', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        videoId,
+        modelId,
+        tau: thresholdTau,
+        useContextExpansion,
+        enableFlashLiteVerifier,
+        turnsCount: turns.length,
+        evaluated,
+        source: finalSource,
+      }),
+    }).catch(() => {});
+  }
+
+  onProgress?.(sentences.length, sentences.length, 'Evaluation complete & persisted to shared cache.');
+  return {
+    evaluated,
+    source: finalSource,
+    fromCache: false,
+    cachedAt: nowIso,
+    hitCount: 1,
+    latencyMs: totalLatencyMs,
+  };
 }
 
 /**
