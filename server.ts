@@ -143,31 +143,36 @@ let totalCacheHits = 0;
 
 // 1. Load pre-indexed benchmark debates and hydrate disk debate cache
 const benchmarkDebatesPath = path.join(__dirname, 'src', 'constants', 'benchmarkDebates.json');
-let benchmarkDebatesList: any[] = [];
-try {
-  benchmarkDebatesList = JSON.parse(fs.readFileSync(benchmarkDebatesPath, 'utf-8'));
-} catch (e: any) {
-  console.warn('Could not read benchmarkDebates.json:', e?.message);
+let BENCHMARK_DEBATES: Record<string, CachedDebateRecord> = {};
+
+function reloadBenchmarkDebates(): Record<string, CachedDebateRecord> {
+  try {
+    const benchmarkDebatesList: any[] = JSON.parse(fs.readFileSync(benchmarkDebatesPath, 'utf-8'));
+    const map: Record<string, CachedDebateRecord> = {};
+    for (const debate of benchmarkDebatesList) {
+      map[debate.videoId] = {
+        videoId: debate.videoId,
+        title: debate.title,
+        channel: debate.channel,
+        durationSeconds: debate.durationSeconds,
+        speaker1Name: debate.speakers?.speaker_1?.name || 'Speaker 1',
+        speaker1Role: debate.speakers?.speaker_1?.role || 'Host',
+        speaker2Name: debate.speakers?.speaker_2?.name || 'Speaker 2',
+        speaker2Role: debate.speakers?.speaker_2?.role || 'Guest',
+        turns: debate.turns || [],
+        cachedAt: '2026-10-20T00:00:00.000Z',
+        hitCount: 1,
+        sourceType: 'benchmark',
+      };
+    }
+    BENCHMARK_DEBATES = map;
+  } catch (e: any) {
+    console.warn('Could not read benchmarkDebates.json:', e?.message);
+  }
+  return BENCHMARK_DEBATES;
 }
 
-const BENCHMARK_DEBATES: Record<string, CachedDebateRecord> = {};
-for (const debate of benchmarkDebatesList) {
-  const record: CachedDebateRecord = {
-    videoId: debate.videoId,
-    title: debate.title,
-    channel: debate.channel,
-    durationSeconds: debate.durationSeconds,
-    speaker1Name: debate.speakers?.speaker_1?.name || 'Speaker 1',
-    speaker1Role: debate.speakers?.speaker_1?.role || 'Host',
-    speaker2Name: debate.speakers?.speaker_2?.name || 'Speaker 2',
-    speaker2Role: debate.speakers?.speaker_2?.role || 'Guest',
-    turns: debate.turns || [],
-    cachedAt: '2026-10-20T00:00:00.000Z',
-    hitCount: 1,
-    sourceType: 'benchmark',
-  };
-  BENCHMARK_DEBATES[debate.videoId] = record;
-}
+reloadBenchmarkDebates();
 
 function isPlaceholderPoisonedRecord(rec: CachedDebateRecord | null | undefined): boolean {
   if (!rec || !Array.isArray(rec.turns) || rec.turns.length === 0) return true;
@@ -320,6 +325,7 @@ function invalidateVideoCaches(videoId: string): {
     }
   }
 
+  reloadBenchmarkDebates();
   return { removedDebate: hadDebate, removedEvaluations };
 }
 
@@ -1106,6 +1112,7 @@ ${JSON.stringify(utterances, null, 2)}`;
     }
 
     // 2. Check pre-indexed benchmark debates when not forcing a live re-analysis
+    reloadBenchmarkDebates();
     if (!forceReanalyze && resolvedVideoId && BENCHMARK_DEBATES[resolvedVideoId]) {
       const benchmark: CachedDebateRecord = {
         ...BENCHMARK_DEBATES[resolvedVideoId],

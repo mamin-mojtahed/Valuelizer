@@ -10,3 +10,5 @@ coverage/
 .vscode/
 scratch/
 .cache/
+
+package-lock.json
