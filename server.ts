@@ -174,48 +174,209 @@ function reloadBenchmarkDebates(): Record<string, CachedDebateRecord> {
 
 reloadBenchmarkDebates();
 
-function isPlaceholderPoisonedRecord(rec: CachedDebateRecord | null | undefined): boolean {
+function extractSpeakerNamesFromTitle(title: string): { speaker1Name: string; speaker2Name: string } | null {
+  if (!title) return null;
+  const cleanTitle = title.split(/[:\-|–—]/)[0].trim();
+  const namePattern = `[A-Z][a-zA-Z'.-]+(?:\\s+[A-Z][a-zA-Z'.-]+){1,3}`;
+
+  const vsRegex = new RegExp(`(${namePattern})\\s+(?:vs\\.?|versus|v\\.)\\s+(${namePattern})`, 'i');
+  const vsMatch = cleanTitle.match(vsRegex) || title.match(vsRegex);
+  if (vsMatch) return { speaker1Name: vsMatch[1].trim(), speaker2Name: vsMatch[2].trim() };
+
+  const andRegex = new RegExp(`(${namePattern})\\s+(?:&|and|with)\\s+(${namePattern})`, 'i');
+  const andMatch = cleanTitle.match(andRegex) || title.match(andRegex);
+  if (andMatch) return { speaker1Name: andMatch[1].trim(), speaker2Name: andMatch[2].trim() };
+
+  return null;
+}
+
+function isMalformedDebateRecord(rec: CachedDebateRecord | null | undefined): boolean {
   if (!rec || !Array.isArray(rec.turns) || rec.turns.length === 0) return true;
-  return rec.turns.some(
+
+  // 1. Check for placeholder text
+  const hasPlaceholders = rec.turns.some(
     (t) =>
       typeof t.text === 'string' &&
       (t.text.includes('From this perspective, empirical evidence and demonstrable predictability are essential.') ||
         t.text.includes('Today we discuss the foundational arguments regarding http'))
   );
+  if (hasPlaceholders) return true;
+
+  // 2. Check for degenerate single-speaker assignment on multi-turn conversations
+  if (rec.turns.length >= 4) {
+    const s1Count = rec.turns.filter((t) => t.speakerId === 'speaker_1').length;
+    const s2Count = rec.turns.filter((t) => t.speakerId === 'speaker_2').length;
+    if (s1Count === 0 || s2Count === 0) return true;
+  }
+
+  // 3. Check for unparsed raw closed-caption speaker cues left in turn text
+  const hasRawCuePrefixes = rec.turns.some(
+    (t) => typeof t.text === 'string' && /(?:^|\s)>>\s*[A-Z]/.test(t.text)
+  );
+  if (hasRawCuePrefixes) return true;
+
+  return false;
+}
+
+const isPlaceholderPoisonedRecord = isMalformedDebateRecord;
+
+function repairMalformedDebateRecord(record: CachedDebateRecord): CachedDebateRecord {
+  let s1Name = record.speaker1Name === 'Speaker 1' ? 'Speaker 1' : record.speaker1Name;
+  let s2Name = record.speaker2Name === 'Speaker 2' ? 'Speaker 2' : record.speaker2Name;
+
+  const titleNames = extractSpeakerNamesFromTitle(record.title);
+  if (titleNames && s1Name === 'Speaker 1') {
+    s1Name = titleNames.speaker1Name;
+    s2Name = titleNames.speaker2Name;
+  }
+
+  const discoveredNames: string[] = [];
+  for (const t of record.turns) {
+    const matches = (t.text || '').matchAll(/(?:^|\s)>>\s*([A-Za-z\s.'-]+):/g);
+    for (const m of matches) {
+      const name = m[1].trim();
+      if (name.length > 1 && name.length < 35 && !discoveredNames.includes(name)) {
+        discoveredNames.push(name);
+      }
+    }
+  }
+
+  if (discoveredNames.length >= 2) {
+    s1Name = discoveredNames[0];
+    s2Name = discoveredNames[1];
+  } else if (discoveredNames.length === 1 && s2Name === 'Speaker 2') {
+    s1Name = discoveredNames[0];
+  }
+
+  const nameToId = new Map<string, string>();
+  nameToId.set(s1Name.toLowerCase(), 'speaker_1');
+  nameToId.set(s2Name.toLowerCase(), 'speaker_2');
+
+  let currentS = 'speaker_1';
+  let consecutiveSame = 0;
+  const repairedTurns: Array<{
+    id: string;
+    timestamp: number;
+    endTime: number;
+    speakerId: string;
+    text: string;
+  }> = [];
+
+  for (let idx = 0; idx < record.turns.length; idx++) {
+    const t = record.turns[idx];
+    const text = (t.text || '').trim();
+
+    if (text.includes('>>')) {
+      const parts = text.split(/(?=\s*>>)/);
+      for (const p of parts) {
+        const trimmed = p.trim();
+        if (!trimmed) continue;
+        const tagMatch = trimmed.match(/^>>\s*([^:\n]+):\s*([\s\S]*)$/);
+        if (tagMatch) {
+          const rawName = tagMatch[1].trim();
+          const cleanText = tagMatch[2].trim();
+          const lower = rawName.toLowerCase();
+          if (!nameToId.has(lower)) {
+            const assignedId = nameToId.size === 0 ? 'speaker_1' : 'speaker_2';
+            nameToId.set(lower, assignedId);
+          }
+          currentS = nameToId.get(lower) || (currentS === 'speaker_1' ? 'speaker_2' : 'speaker_1');
+          repairedTurns.push({
+            id: `turn-${repairedTurns.length + 1}`,
+            timestamp: t.timestamp,
+            endTime: t.endTime,
+            speakerId: currentS,
+            text: cleanText,
+          });
+        } else {
+          currentS = currentS === 'speaker_1' ? 'speaker_2' : 'speaker_1';
+          const cleanText = trimmed.replace(/^>>\s*/, '').trim();
+          repairedTurns.push({
+            id: `turn-${repairedTurns.length + 1}`,
+            timestamp: t.timestamp,
+            endTime: t.endTime,
+            speakerId: currentS,
+            text: cleanText,
+          });
+        }
+      }
+    } else if (discoveredNames.length > 0) {
+      repairedTurns.push({
+        id: `turn-${repairedTurns.length + 1}`,
+        timestamp: t.timestamp,
+        endTime: t.endTime,
+        speakerId: currentS,
+        text: text.replace(/^>>\s*/, '').trim(),
+      });
+    } else {
+      if (idx > 0) {
+        const prev = record.turns[idx - 1];
+        const prevText = (prev.text || '').trim();
+        const pause = t.timestamp - prev.endTime;
+        const isQuestion = /[?]$/.test(prevText) || /\b(why|what|how|explain that|right\?|how come)\b/i.test(prevText);
+        const startsWithDiscourse = /^(well|yes|no|yeah|i agree|look|good to be here|i think|and so)\b/i.test(text);
+        const isAcousticGap = pause > 0.5;
+        const reachedLimit = consecutiveSame >= 4;
+
+        if ((isQuestion && (isAcousticGap || startsWithDiscourse)) || (startsWithDiscourse && isAcousticGap) || reachedLimit) {
+          currentS = currentS === 'speaker_1' ? 'speaker_2' : 'speaker_1';
+          consecutiveSame = 0;
+        } else {
+          consecutiveSame++;
+        }
+      }
+      repairedTurns.push({
+        id: `turn-${repairedTurns.length + 1}`,
+        timestamp: t.timestamp,
+        endTime: t.endTime,
+        speakerId: currentS,
+        text: text.replace(/^>>\s*/, '').trim(),
+      });
+    }
+  }
+
+  return {
+    ...record,
+    speaker1Name: s1Name,
+    speaker2Name: s2Name,
+    turns: repairedTurns,
+  };
 }
 
 function hydrateCachesFromDisk(): void {
-  // Hydrate debates from disk (purging any stale placeholder-poisoned cache files)
+  // 1. Authoritative Benchmark Debates always hydrate first
+  for (const [vid, bench] of Object.entries(BENCHMARK_DEBATES)) {
+    videoCache.set(vid, bench);
+    const filePath = path.join(DEBATES_CACHE_DIR, `${sanitizeFileKey(vid)}.json`);
+    writeJsonAtomic(filePath, bench);
+  }
+
+  // 2. Hydrate dynamic debates from disk (repairing or purging any stale/malformed cache files)
   try {
     const files = fs.readdirSync(DEBATES_CACHE_DIR).filter((f) => f.endsWith('.json'));
     for (const file of files) {
       const fullPath = path.join(DEBATES_CACHE_DIR, file);
       const rec = readJsonSafe<CachedDebateRecord>(fullPath);
-      if (rec && isPlaceholderPoisonedRecord(rec)) {
-        try {
-          fs.unlinkSync(fullPath);
-        } catch (_e) {
-          // Ignore
+      if (rec && rec.videoId && !videoCache.has(rec.videoId)) {
+        if (isMalformedDebateRecord(rec)) {
+          const repaired = repairMalformedDebateRecord(rec);
+          if (!isMalformedDebateRecord(repaired)) {
+            writeJsonAtomic(fullPath, repaired);
+            videoCache.set(repaired.videoId, repaired);
+          } else {
+            try {
+              fs.unlinkSync(fullPath);
+            } catch (_e) {
+              // Ignore
+            }
+          }
+        } else if (Array.isArray(rec.turns) && rec.turns.length > 0) {
+          videoCache.set(rec.videoId, rec);
         }
-        continue;
-      }
-      if (rec && rec.videoId && Array.isArray(rec.turns) && rec.turns.length > 0) {
-        videoCache.set(rec.videoId, rec);
       }
     }
   } catch (_e) {
     // Ignore read dir error
-  }
-
-  // Ensure benchmark debates exist in videoCache and on disk
-  for (const [vid, bench] of Object.entries(BENCHMARK_DEBATES)) {
-    if (!videoCache.has(vid)) {
-      videoCache.set(vid, bench);
-      const filePath = path.join(DEBATES_CACHE_DIR, `${sanitizeFileKey(vid)}.json`);
-      if (!fs.existsSync(filePath)) {
-        writeJsonAtomic(filePath, bench);
-      }
-    }
   }
 
   // Hydrate evaluations from disk
@@ -1080,38 +1241,7 @@ ${JSON.stringify(utterances, null, 2)}`;
       invalidateVideoCaches(resolvedVideoId);
     }
 
-    // 1. Check persistent memory & disk cache first (unless forceReanalyze is requested)
-    if (!forceReanalyze && resolvedVideoId) {
-      let cached = videoCache.get(resolvedVideoId);
-      if (!cached) {
-        const diskFile = path.join(DEBATES_CACHE_DIR, `${sanitizeFileKey(resolvedVideoId)}.json`);
-        const diskData = readJsonSafe<CachedDebateRecord>(diskFile);
-        if (diskData && !isPlaceholderPoisonedRecord(diskData)) {
-          videoCache.set(resolvedVideoId, diskData);
-          cached = diskData;
-        } else if (diskData) {
-          invalidateVideoCaches(resolvedVideoId);
-        }
-      } else if (isPlaceholderPoisonedRecord(cached)) {
-        invalidateVideoCaches(resolvedVideoId);
-        cached = undefined;
-      }
-
-      if (cached) {
-        cached.hitCount = (cached.hitCount || 1) + 1;
-        totalCacheHits++;
-        persistDebateToDisk(cached);
-        const latencyMs = Math.max(1, Math.round(performance.now() - startMs));
-        res.json({
-          ...cached,
-          fromCache: true,
-          cacheLatencyMs: latencyMs,
-        });
-        return;
-      }
-    }
-
-    // 2. Check pre-indexed benchmark debates when not forcing a live re-analysis
+    // 1. Check pre-indexed benchmark debates first when not forcing a live re-analysis
     reloadBenchmarkDebates();
     if (!forceReanalyze && resolvedVideoId && BENCHMARK_DEBATES[resolvedVideoId]) {
       const benchmark: CachedDebateRecord = {
@@ -1127,6 +1257,52 @@ ${JSON.stringify(utterances, null, 2)}`;
         cacheLatencyMs: latencyMs,
       });
       return;
+    }
+
+    // 2. Check persistent memory & disk cache next (unless forceReanalyze is requested)
+    if (!forceReanalyze && resolvedVideoId) {
+      let cached = videoCache.get(resolvedVideoId);
+      if (!cached) {
+        const diskFile = path.join(DEBATES_CACHE_DIR, `${sanitizeFileKey(resolvedVideoId)}.json`);
+        let diskData = readJsonSafe<CachedDebateRecord>(diskFile);
+        if (diskData && isMalformedDebateRecord(diskData)) {
+          const repaired = repairMalformedDebateRecord(diskData);
+          if (!isMalformedDebateRecord(repaired)) {
+            writeJsonAtomic(diskFile, repaired);
+            diskData = repaired;
+          } else {
+            invalidateVideoCaches(resolvedVideoId);
+            diskData = null;
+          }
+        }
+        if (diskData) {
+          videoCache.set(resolvedVideoId, diskData);
+          cached = diskData;
+        }
+      } else if (isMalformedDebateRecord(cached)) {
+        const repaired = repairMalformedDebateRecord(cached);
+        if (!isMalformedDebateRecord(repaired)) {
+          videoCache.set(resolvedVideoId, repaired);
+          persistDebateToDisk(repaired);
+          cached = repaired;
+        } else {
+          invalidateVideoCaches(resolvedVideoId);
+          cached = undefined;
+        }
+      }
+
+      if (cached) {
+        cached.hitCount = (cached.hitCount || 1) + 1;
+        totalCacheHits++;
+        persistDebateToDisk(cached);
+        const latencyMs = Math.max(1, Math.round(performance.now() - startMs));
+        res.json({
+          ...cached,
+          fromCache: true,
+          cacheLatencyMs: latencyMs,
+        });
+        return;
+      }
     }
 
     // 3. Fetch authentic YouTube metadata and captions via InnerTube + oEmbed
@@ -1166,35 +1342,133 @@ ${JSON.stringify(utterances, null, 2)}`;
     // Branch A: Authentic XML captions directly returned from YouTube
     if (rawCues.length > 0) {
       sourceType = 'youtube-captions';
-      // Aggregate fragmented sub-second caption cues into coherent speech sentences
-      const sentences: Array<{ start: number; end: number; text: string }> = [];
-      let currentBlock = { start: rawCues[0].start, end: rawCues[0].end, text: rawCues[0].text };
 
-      for (let i = 1; i < rawCues.length; i++) {
-        const c = rawCues[i];
-        const pause = c.start - currentBlock.end;
-        const textLen = currentBlock.text.length;
-        const endsWithPunct = /[.!?]$/.test(currentBlock.text.trim());
-
-        if (pause > 1.2 || (endsWithPunct && textLen > 50) || textLen > 240) {
-          sentences.push(currentBlock);
-          currentBlock = { start: c.start, end: c.end, text: c.text };
-        } else {
-          currentBlock.end = c.end;
-          currentBlock.text += ' ' + c.text;
+      // 1. Extract speaker names from title if still generic
+      if (speaker1Name === 'Speaker 1') {
+        const titleSpeakers = extractSpeakerNamesFromTitle(title);
+        if (titleSpeakers) {
+          speaker1Name = titleSpeakers.speaker1Name;
+          speaker2Name = titleSpeakers.speaker2Name;
         }
       }
-      sentences.push(currentBlock);
 
+      // 2. Scan raw cues for explicit speaker cues (e.g. ">> Ken Ham:", ">> Bill Nye:")
+      const discoveredSpeakerNames: string[] = [];
+      for (const c of rawCues) {
+        const matches = (c.text || '').matchAll(/(?:^|\s)>>\s*([A-Za-z\s.'-]+):/g);
+        for (const m of matches) {
+          const name = m[1].trim();
+          if (name.length > 1 && name.length < 35 && !discoveredSpeakerNames.includes(name)) {
+            discoveredSpeakerNames.push(name);
+          }
+        }
+      }
+
+      if (discoveredSpeakerNames.length >= 2) {
+        speaker1Name = discoveredSpeakerNames[0];
+        speaker2Name = discoveredSpeakerNames[1];
+      } else if (discoveredSpeakerNames.length === 1 && speaker2Name === 'Speaker 2') {
+        speaker1Name = discoveredSpeakerNames[0];
+      }
+
+      // 3. Flatten raw cues, splitting any mid-cue ">>" markers so each speaker turn starts on its own cue
+      const flattenedCues: RawCaptionCue[] = [];
+      for (const c of rawCues) {
+        const text = (c.text || '').trim();
+        if (text.includes('>>') && !text.startsWith('>>')) {
+          const parts = text.split(/(?=\s*>>)/);
+          const totalLen = text.length || 1;
+          let curStart = c.start;
+          for (const p of parts) {
+            const pLen = p.length;
+            const pDur = (c.end - c.start) * (pLen / totalLen);
+            flattenedCues.push({
+              start: Math.round(curStart * 10) / 10,
+              end: Math.round((curStart + pDur) * 10) / 10,
+              text: p.trim(),
+            });
+            curStart += pDur;
+          }
+        } else {
+          flattenedCues.push(c);
+        }
+      }
+
+      // 4. Aggregate fragmented sub-second caption cues into coherent speech sentences
+      const sentences: Array<{ start: number; end: number; text: string }> = [];
+      if (flattenedCues.length > 0) {
+        let currentBlock = { start: flattenedCues[0].start, end: flattenedCues[0].end, text: flattenedCues[0].text };
+
+        for (let i = 1; i < flattenedCues.length; i++) {
+          const c = flattenedCues[i];
+          const pause = c.start - currentBlock.end;
+          const textLen = currentBlock.text.length;
+          const endsWithPunct = /[.!?]$/.test(currentBlock.text.trim());
+          const hasSpeakerMarker = /(?:^|\s)>>/.test(c.text) || /^[A-Z][a-zA-Z\s.'-]+:/.test(c.text);
+
+          if (hasSpeakerMarker || pause > 1.0 || (endsWithPunct && textLen > 50) || textLen > 220) {
+            sentences.push(currentBlock);
+            currentBlock = { start: c.start, end: c.end, text: c.text };
+          } else {
+            currentBlock.end = c.end;
+            currentBlock.text += ' ' + c.text;
+          }
+        }
+        sentences.push(currentBlock);
+      }
+
+      // 5. Diarization:
       let diarized = false;
-      try {
-        const ai = getGenAIClient();
-        const sentenceLines = sentences
-          .slice(0, 80)
-          .map((s, idx) => `[${idx}] (${s.start}s-${s.end}s): ${s.text}`)
-          .join('\n');
 
-        const prompt = `Analyze this conversation from the YouTube video: "${title}" (${duration}s, channel: ${channel}).
+      // Strategy 5A: If explicit ">> Name:" or ">>" tags exist in captions, perform deterministic local diarization
+      const hasDoubleChevrons = sentences.some((s) => (s.text || '').includes('>>'));
+      if (discoveredSpeakerNames.length > 0 || hasDoubleChevrons) {
+        const nameToId = new Map<string, string>();
+        nameToId.set(speaker1Name.toLowerCase(), 'speaker_1');
+        nameToId.set(speaker2Name.toLowerCase(), 'speaker_2');
+
+        let currentS = 'speaker_1';
+        parsedTurns = sentences
+          .map((s, idx) => {
+            let text = s.text.trim();
+            const tagMatch = text.match(/^>>\s*([^:\n]+):\s*([\s\S]*)$/);
+            if (tagMatch) {
+              const rawName = tagMatch[1].trim();
+              text = tagMatch[2].trim();
+              const lower = rawName.toLowerCase();
+              if (!nameToId.has(lower)) {
+                const assignedId = nameToId.size === 0 ? 'speaker_1' : 'speaker_2';
+                nameToId.set(lower, assignedId);
+              }
+              currentS = nameToId.get(lower) || (currentS === 'speaker_1' ? 'speaker_2' : 'speaker_1');
+            } else if (text.startsWith('>>')) {
+              currentS = currentS === 'speaker_1' ? 'speaker_2' : 'speaker_1';
+              text = text.replace(/^>>\s*/, '').trim();
+            }
+
+            text = text.replace(/^>>\s*/, '').trim();
+            return {
+              id: 'turn-' + (idx + 1),
+              timestamp: Math.round(s.start * 10) / 10,
+              endTime: Math.round(s.end * 10) / 10,
+              speakerId: currentS,
+              text,
+            };
+          })
+          .filter((t) => t.text.length > 0);
+
+        diarized = parsedTurns.length > 0;
+      }
+
+      // Strategy 5B: If no explicit caption tags, attempt Gemini LLM diarization
+      if (!diarized && sentences.length > 0) {
+        try {
+          const ai = getGenAIClient();
+          const sentenceLines = sentences
+            .map((s, idx) => `[${idx}] (${s.start}s-${s.end}s): ${s.text}`)
+            .join('\n');
+
+          const prompt = `Analyze this conversation from the YouTube video: "${title}" (${duration}s, channel: ${channel}).
 Identify the 2 primary opposing speakers (speaker1Name, speaker1Role, speaker2Name, speaker2Role).
 Assign each sentence below to speaker 1 or 2:
 
@@ -1202,50 +1476,73 @@ ${sentenceLines}
 
 Return JSON: { "speaker1Name": "...", "speaker1Role": "...", "speaker2Name": "...", "speaker2Role": "...", "assignments": [1, 2, ...] }`;
 
-        for (const mId of TRANSCRIPTION_MODELS) {
-          try {
-            const geminiRes = await ai.models.generateContent({
-              model: mId,
-              contents: prompt,
-              config: { responseMimeType: 'application/json' },
-            });
-            const parsed = JSON.parse(geminiRes.text?.trim() || '{}');
-            if (parsed.speaker1Name) speaker1Name = parsed.speaker1Name;
-            if (parsed.speaker2Name) speaker2Name = parsed.speaker2Name;
-            if (parsed.speaker1Role) speaker1Role = parsed.speaker1Role;
-            if (parsed.speaker2Role) speaker2Role = parsed.speaker2Role;
+          for (const mId of TRANSCRIPTION_MODELS) {
+            try {
+              const geminiRes = await ai.models.generateContent({
+                model: mId,
+                contents: prompt,
+                config: { responseMimeType: 'application/json' },
+              });
+              const parsed = JSON.parse(geminiRes.text?.trim() || '{}');
+              if (parsed.speaker1Name) speaker1Name = parsed.speaker1Name;
+              if (parsed.speaker2Name) speaker2Name = parsed.speaker2Name;
+              if (parsed.speaker1Role) speaker1Role = parsed.speaker1Role;
+              if (parsed.speaker2Role) speaker2Role = parsed.speaker2Role;
 
-            const assignments: number[] = Array.isArray(parsed.assignments) ? parsed.assignments : [];
-            parsedTurns = sentences.map((s, idx) => ({
-              id: 'turn-' + (idx + 1),
-              timestamp: Math.round(s.start * 10) / 10,
-              endTime: Math.round(s.end * 10) / 10,
-              speakerId: assignments[idx] === 2 ? 'speaker_2' : 'speaker_1',
-              text: s.text,
-            }));
-            diarized = true;
-            break;
-          } catch (mErr: any) {
-            console.warn(`Caption diarization model ${mId} notice:`, mErr?.message?.slice(0, 120));
+              const assignments: any[] = Array.isArray(parsed.assignments) ? parsed.assignments : [];
+              if (assignments.length > 0) {
+                parsedTurns = sentences.map((s, idx) => {
+                  const assignVal = String(assignments[idx] ?? '');
+                  const isSpk2 = assignVal === '2' || assignVal.includes('2') || assignVal === 'speaker_2';
+                  return {
+                    id: 'turn-' + (idx + 1),
+                    timestamp: Math.round(s.start * 10) / 10,
+                    endTime: Math.round(s.end * 10) / 10,
+                    speakerId: isSpk2 ? 'speaker_2' : 'speaker_1',
+                    text: s.text,
+                  };
+                });
+                diarized = true;
+                break;
+              }
+            } catch (mErr: any) {
+              console.warn(`Caption diarization model ${mId} notice:`, mErr?.message?.slice(0, 120));
+            }
           }
+        } catch (err: any) {
+          console.warn('Diarization notice:', err?.message);
         }
-      } catch (err: any) {
-        console.warn('Diarization notice:', err?.message);
       }
 
-      // Fallback if Gemini diarization fails: alternate speakers based on speech pauses
+      // Strategy 5C: Robust local dialogue heuristic fallback (offline / rate-limited / zero-credits)
       if (!diarized || parsedTurns.length === 0) {
         let currentS = 'speaker_1';
+        let consecutiveSame = 0;
         parsedTurns = sentences.map((s, idx) => {
-          if (idx > 0 && s.start - sentences[idx - 1].end > 1.2) {
-            currentS = currentS === 'speaker_1' ? 'speaker_2' : 'speaker_1';
+          let text = s.text.trim();
+          if (idx > 0) {
+            const prev = sentences[idx - 1];
+            const prevText = prev.text.trim();
+            const pause = s.start - prev.end;
+            const isQuestion = /[?]$/.test(prevText) || /\b(why|what|how|explain that|right\?|how come)\b/i.test(prevText);
+            const startsWithDiscourse = /^(well|yes|no|yeah|i agree|look|good to be here|i think|and so)\b/i.test(text);
+            const isAcousticGap = pause > 0.5;
+            const reachedLimit = consecutiveSame >= 4;
+
+            if ((isQuestion && (isAcousticGap || startsWithDiscourse)) || (startsWithDiscourse && isAcousticGap) || reachedLimit) {
+              currentS = currentS === 'speaker_1' ? 'speaker_2' : 'speaker_1';
+              consecutiveSame = 0;
+            } else {
+              consecutiveSame++;
+            }
           }
+          text = text.replace(/^>>\s*/, '').trim();
           return {
             id: 'turn-' + (idx + 1),
             timestamp: Math.round(s.start * 10) / 10,
             endTime: Math.round(s.end * 10) / 10,
             speakerId: currentS,
-            text: s.text,
+            text,
           };
         });
       }
