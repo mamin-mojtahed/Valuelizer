@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { TranscriptTurn } from '../constants/schwartzAnchors';
 import { formatTimestamp } from '../utils/schwartzMath';
@@ -35,6 +35,19 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   const playerRef = useRef<any>(null);
   const [ytReady, setYtReady] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+
+  // Compute effective timeline duration based on parsed conversational turns to ensure zero trailing gap
+  const effectiveDuration = useMemo(() => {
+    if (turns && turns.length > 0) {
+      const maxTurnEnd = Math.max(...turns.map((t) => t.endTime || t.timestamp || 0));
+      if (maxTurnEnd > 0) {
+        if (!durationSeconds || durationSeconds > maxTurnEnd + 2) {
+          return Math.round(maxTurnEnd);
+        }
+      }
+    }
+    return durationSeconds || 180;
+  }, [turns, durationSeconds]);
 
   // Load YouTube IFrame API script once
   useEffect(() => {
@@ -137,16 +150,16 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
       }
 
       if (polledTime !== null && !Number.isNaN(polledTime) && polledTime >= 0) {
-        onTimeUpdate(Math.min(durationSeconds, polledTime));
+        onTimeUpdate(Math.min(effectiveDuration, polledTime));
       } else {
         onTimeUpdate(
-          currentTime + 0.25 >= durationSeconds ? durationSeconds : currentTime + 0.25
+          currentTime + 0.1 >= effectiveDuration ? effectiveDuration : currentTime + 0.1
         );
       }
-    }, 250);
+    }, 100);
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentTime, durationSeconds, onTimeUpdate]);
+  }, [isPlaying, currentTime, effectiveDuration, onTimeUpdate]);
 
   const togglePlay = () => {
     const next = !isPlaying;
@@ -256,8 +269,8 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
         >
           {/* Diarized Speaker Sentence Segments */}
           {turns.map((t) => {
-            const leftPct = (t.timestamp / durationSeconds) * 100;
-            const widthPct = Math.max(0.6, ((t.endTime - t.timestamp) / durationSeconds) * 100);
+            const leftPct = (t.timestamp / effectiveDuration) * 100;
+            const widthPct = Math.max(0.6, ((t.endTime - t.timestamp) / effectiveDuration) * 100);
             const isSpeaker1 = t.speakerId === 'speaker_1';
             const isEvaluatedAtTime = t.timestamp <= currentTime;
             return (
@@ -274,7 +287,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
           {/* Playhead Needle and Scrub Handle */}
           <div
             style={{
-              left: `${Math.min(100, Math.max(0, (currentTime / (durationSeconds || 1)) * 100))}%`,
+              left: `${Math.min(100, Math.max(0, (currentTime / (effectiveDuration || 1)) * 100))}%`,
             }}
             className="absolute top-0 bottom-0 w-0.5 bg-white shadow-[0_0_8px_#ffffff] z-10 pointer-events-none"
           >
@@ -285,7 +298,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
           <input
             type="range"
             min={0}
-            max={durationSeconds || 100}
+            max={effectiveDuration || 100}
             step={0.25}
             value={currentTime}
             onChange={(e) => {
@@ -362,7 +375,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
             <div className="flex items-center gap-1.5 font-mono text-xs tabular-nums text-slate-300 pl-1 border-l border-slate-800/80">
               <span className="text-cyan-400 font-semibold">{formatTimestamp(currentTime)}</span>
               <span className="text-slate-600">/</span>
-              <span className="text-slate-400">{formatTimestamp(durationSeconds)}</span>
+              <span className="text-slate-400">{formatTimestamp(effectiveDuration)}</span>
             </div>
           </div>
         </div>

@@ -1556,8 +1556,7 @@ export default function App() {
                     className="max-h-[460px] overflow-y-auto divide-y divide-slate-800/80 transition-all"
                   >
                     {primaryUtterances.map((utt) => {
-                      const isCurrentSentence =
-                        currentTime >= utt.timestamp && currentTime < utt.endTime;
+                      const isCurrentSentence = activeUtterance?.id === utt.id;
                       const isFutureInSync = utt.timestamp > currentTime;
 
                       return (
